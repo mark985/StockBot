@@ -1,0 +1,19 @@
+# Robinhood API
+robin-stocks==3.0.5
+
+# LLM Integration (Anthropic Claude)
+anthropic==0.39.0
+
+# Data Processing
+pandas==2.1.4
+numpy==1.26.2
+
+# Environment Variables
+python-dotenv==1.0.0
+
+# Utilities
+requests==2.31.0
+tabulate==0.9.0
+
+# Date/Time
+python-dateutil==2.8.2
