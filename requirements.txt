@@ -1,0 +1,38 @@
+# Core
+robin-stocks==3.0.5
+google-generativeai==0.3.2
+streamlit==1.29.0
+click==8.1.7
+rich==13.7.0
+
+# Scheduling & Background Tasks
+APScheduler==3.10.4
+
+# Security & Config
+python-dotenv==1.0.0
+keyring==24.3.0
+pyotp==2.9.0
+pydantic==2.5.3
+
+# Data Processing
+pandas==2.1.4
+numpy==1.26.2
+
+# Rate Limiting & HTTP
+ratelimit==2.2.1
+requests==2.31.0
+backoff==2.2.1
+
+# Utilities
+loguru==0.7.2
+plotly==5.18.0
+
+# Testing
+pytest==7.4.3
+pytest-cov==4.1.0
+pytest-mock==3.12.0
+
+# Code Quality
+black==23.12.1
+flake8==6.1.0
+mypy==1.7.1

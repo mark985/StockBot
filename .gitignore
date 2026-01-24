@@ -1,0 +1,43 @@
+# Credentials
+.env
+.env.local
+*.key
+*.pem
+
+# Robinhood session tokens
+.tokens/
+robinhood.pickle
+
+# Logs
+logs/*.log
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+*.egg-info/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Reports (optional - keep locally)
+reports/*.html
+reports/*.pdf
+reports/*.csv
+
+# Virtual Environment
+venv/
+env/
+ENV/
+.venv/
