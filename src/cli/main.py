@@ -45,10 +45,20 @@ def cli(ctx):
 @cli.command()
 @click.option('--username', '-u', help='Robinhood username')
 @click.option('--password', '-p', help='Robinhood password')
-@click.option('--mfa-code', '-m', help='2FA/MFA code if required')
+@click.option('--mfa-code', '-m', help='2FA/MFA code (optional - you will be prompted if needed)')
 @click.option('--store/--no-store', default=True, help='Store session for future use')
 def login(username, password, mfa_code, store):
-    """Login to Robinhood and store session."""
+    """
+    Login to Robinhood and store session.
+
+    If 2FA/MFA is enabled on your account, you will be prompted interactively:
+      - First, enter your username and password
+      - Then, if MFA is required, you'll see: "Please type in the MFA code: "
+      - Enter your 6-digit code from your authenticator app
+
+    Alternatively, you can provide -m flag with the code upfront, but the
+    interactive prompt is usually more convenient.
+    """
     from src.cli.commands import login_command
     login_command(username, password, mfa_code, store)
 

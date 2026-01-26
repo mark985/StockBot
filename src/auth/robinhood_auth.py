@@ -1,14 +1,17 @@
 """
 Robinhood authentication module with 2FA support.
 Handles login, session management, and token persistence.
+
+This module now uses the custom Robinhood client built from scratch,
+replacing the unreliable robin_stocks library.
 """
-import robin_stocks.robinhood as rh
-import pickle
 from pathlib import Path
 from typing import Optional, Dict, Any
 from loguru import logger
 import pyotp
 
+from src.robinhood.client import RobinhoodClient
+from src.robinhood.exceptions import AuthenticationError as RHAuthError
 from src.auth.credentials_manager import get_credentials_manager
 from config.settings import get_settings
 
@@ -24,23 +27,26 @@ class RobinhoodAuth:
 
     Features:
     - Username/password authentication
-    - 2FA/MFA support using pyotp
+    - SMS/Email verification support (prefer_sms option)
     - Session token persistence
     - Automatic token refresh
+
+    This class wraps the custom RobinhoodClient for compatibility with existing code.
     """
 
     def __init__(self):
         """Initialize Robinhood authenticator."""
         self.settings = get_settings()
         self.credentials_manager = get_credentials_manager()
-        self.token_file = self.settings.base_dir / ".tokens" / "robinhood.pickle"
+
+        # Create custom Robinhood client
+        self.client = RobinhoodClient()
+
+        # Legacy compatibility
         self.is_authenticated = False
         self.username = None
 
-        # Ensure token directory exists
-        self.token_file.parent.mkdir(parents=True, exist_ok=True)
-
-        logger.debug("RobinhoodAuth initialized")
+        logger.debug("RobinhoodAuth initialized with custom client")
 
     def login(
         self,
@@ -48,6 +54,7 @@ class RobinhoodAuth:
         password: Optional[str] = None,
         mfa_code: Optional[str] = None,
         store_session: bool = True,
+        prefer_sms: bool = False,
     ) -> bool:
         """
         Login to Robinhood.
@@ -55,14 +62,19 @@ class RobinhoodAuth:
         Args:
             username: Robinhood username (optional, will use stored if not provided)
             password: Robinhood password (optional, will use stored if not provided)
-            mfa_code: 2FA/MFA code if required
+            mfa_code: 2FA/MFA code if required (leave None to use interactive prompt)
             store_session: Whether to persist session token
+            prefer_sms: If True, request SMS/email verification instead of app push
 
         Returns:
             bool: True if login successful, False otherwise
 
         Raises:
             RobinhoodAuthError: If login fails
+
+        Note:
+            The custom client will automatically handle verification workflows,
+            including SMS/email verification if prefer_sms=True.
         """
         # Get credentials from parameters or stored location
         if not username:
@@ -79,40 +91,33 @@ class RobinhoodAuth:
         try:
             logger.info(f"Attempting to login to Robinhood for user: {username}")
 
-            # Attempt login with MFA if provided
-            if mfa_code:
-                logger.debug("Logging in with MFA code")
-                login_result = rh.login(username, password, mfa_code=mfa_code, store_session=store_session)
-            else:
-                logger.debug("Logging in without MFA code")
-                login_result = rh.login(username, password, store_session=store_session)
+            # Use custom Robinhood client for login
+            login_result = self.client.login(
+                username=username,
+                password=password,
+                mfa_code=mfa_code,
+                prefer_sms=prefer_sms
+            )
 
-            # Check if login was successful
-            if login_result:
+            # Custom client returns a dict with access_token on success
+            if login_result and isinstance(login_result, dict) and 'access_token' in login_result:
                 self.is_authenticated = True
                 self.username = username
                 logger.info(f"Successfully logged in to Robinhood as {username}")
-
-                # Store session token if requested
-                if store_session:
-                    self._save_session_token()
-
                 return True
             else:
-                logger.error("Login failed: No result returned from robin_stocks")
-                raise RobinhoodAuthError("Login failed")
+                raise RobinhoodAuthError("Login failed: Invalid response from Robinhood")
 
+        except RobinhoodAuthError:
+            # Re-raise our custom errors
+            raise
+        except RHAuthError as e:
+            # Convert custom client auth errors to RobinhoodAuthError
+            logger.error(f"Authentication error from custom client: {e}")
+            raise RobinhoodAuthError(f"Login failed: {str(e)}") from e
         except Exception as e:
             error_msg = str(e)
-
-            # Check if MFA is required
-            if "mfa_required" in error_msg.lower() or "challenge" in error_msg.lower():
-                logger.warning("MFA/2FA required for login")
-                raise RobinhoodAuthError(
-                    "MFA/2FA code required. Please provide mfa_code parameter."
-                ) from e
-
-            logger.error(f"Robinhood login failed: {error_msg}")
+            logger.error(f"Robinhood login failed with exception: {error_msg}")
             raise RobinhoodAuthError(f"Login failed: {error_msg}") from e
 
     def login_with_stored_session(self) -> bool:
@@ -122,33 +127,16 @@ class RobinhoodAuth:
         Returns:
             bool: True if login successful, False otherwise
         """
-        if not self.token_file.exists():
-            logger.debug("No stored session token found")
-            return False
-
         try:
             logger.info("Attempting to login with stored session token")
 
-            # Load stored session
-            with open(self.token_file, "rb") as f:
-                session_data = pickle.load(f)
-
-            username = session_data.get("username")
-            if not username:
-                logger.warning("No username in stored session")
-                return False
-
-            # robin_stocks will automatically use stored session
-            # We just need to call login with store_session=True
-            login_result = rh.login(username, store_session=True)
-
-            if login_result:
-                self.is_authenticated = True
-                self.username = username
-                logger.info(f"Successfully restored session for {username}")
+            # Custom client automatically loads session from ~/.tokens/robinhood_custom.pickle
+            if self.client.load_session():
+                self.is_authenticated = self.client.is_authenticated
+                logger.info("Successfully restored session")
                 return True
             else:
-                logger.warning("Stored session is invalid or expired")
+                logger.warning("No stored session or session is invalid")
                 return False
 
         except Exception as e:
@@ -164,12 +152,7 @@ class RobinhoodAuth:
         """
         try:
             logger.info("Logging out from Robinhood")
-            rh.logout()
-
-            # Clear session token file
-            if self.token_file.exists():
-                self.token_file.unlink()
-                logger.debug("Session token file deleted")
+            self.client.logout()
 
             self.is_authenticated = False
             self.username = None
@@ -188,8 +171,8 @@ class RobinhoodAuth:
             bool: True if authenticated and session is valid
         """
         try:
-            # Try to fetch account info as a test
-            account_info = rh.profiles.load_account_profile()
+            # Try to fetch account info as a test using custom client
+            account_info = self.client.get_account()
 
             if account_info:
                 self.is_authenticated = True
@@ -205,28 +188,6 @@ class RobinhoodAuth:
             self.is_authenticated = False
             return False
 
-    def _save_session_token(self) -> bool:
-        """
-        Save current session token to file.
-
-        Returns:
-            bool: True if successful
-        """
-        try:
-            session_data = {
-                "username": self.username,
-            }
-
-            with open(self.token_file, "wb") as f:
-                pickle.dump(session_data, f)
-
-            logger.debug(f"Session token saved to {self.token_file}")
-            return True
-
-        except Exception as e:
-            logger.error(f"Failed to save session token: {e}")
-            return False
-
     def get_authentication_status(self) -> Dict[str, Any]:
         """
         Get current authentication status.
@@ -235,11 +196,20 @@ class RobinhoodAuth:
             dict: Authentication status information
         """
         return {
-            "is_authenticated": self.is_authenticated,
+            "is_authenticated": self.is_authenticated or self.client.is_authenticated,
             "username": self.username,
-            "has_stored_session": self.token_file.exists(),
+            "has_stored_session": self.client.session_file.exists(),
             "has_stored_credentials": self.credentials_manager.has_robinhood_credentials(),
         }
+
+    def get_client(self) -> RobinhoodClient:
+        """
+        Get the underlying custom Robinhood client for direct API access.
+
+        Returns:
+            RobinhoodClient: The custom client instance
+        """
+        return self.client
 
     @staticmethod
     def generate_mfa_code(secret: str) -> str:

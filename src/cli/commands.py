@@ -22,7 +22,14 @@ console = Console()
 
 
 def login_command(username: Optional[str], password: Optional[str], mfa_code: Optional[str], store: bool):
-    """Handle login command."""
+    """
+    Handle login command.
+
+    Note: If MFA/2FA is required, robin_stocks will prompt interactively.
+    You'll see prompts like:
+      - "Please type in the MFA code: "
+      - "Enter Robinhood code for validation: "
+    """
     try:
         console.print("\n[bold cyan]🔐 StockBot Login[/bold cyan]\n")
 
@@ -52,49 +59,30 @@ def login_command(username: Optional[str], password: Optional[str], mfa_code: Op
 
         # Attempt login
         console.print("[yellow]Logging in to Robinhood...[/yellow]")
+        console.print("[dim]If 2FA/MFA is required, you'll be prompted for the code...[/dim]\n")
 
-        try:
-            success = auth.login(username, password, mfa_code, store)
+        success = auth.login(username, password, mfa_code, store)
 
-            if success:
-                console.print("[bold green]✓ Login successful![/bold green]")
-                console.print(f"[green]Logged in as: {username}[/green]")
+        if success:
+            console.print("\n[bold green]✓ Login successful![/bold green]")
+            console.print(f"[green]Logged in as: {username}[/green]")
 
-                # Offer to store credentials
-                if store and Confirm.ask("\n[cyan]Store credentials securely in keyring?[/cyan]", default=True):
-                    cred_manager.store_robinhood_credentials(username, password)
-                    console.print("[green]✓ Credentials stored securely[/green]")
+            # Offer to store credentials
+            if store and Confirm.ask("\n[cyan]Store credentials securely in keyring?[/cyan]", default=True):
+                cred_manager.store_robinhood_credentials(username, password)
+                console.print("[green]✓ Credentials stored securely[/green]")
 
-                console.print()
+            console.print()
+        else:
+            console.print("[bold red]✗ Login failed[/bold red]\n")
+            sys.exit(1)
 
-        except RobinhoodAuthError as e:
-            error_msg = str(e)
-
-            if "MFA" in error_msg or "2FA" in error_msg:
-                # MFA required
-                console.print("[yellow]2FA/MFA code required[/yellow]")
-                mfa_code = Prompt.ask("[cyan]Enter 6-digit MFA code[/cyan]")
-
-                # Retry with MFA
-                success = auth.login(username, password, mfa_code, store)
-
-                if success:
-                    console.print("[bold green]✓ Login successful![/bold green]")
-                    console.print(f"[green]Logged in as: {username}[/green]\n")
-
-                    if store:
-                        cred_manager.store_robinhood_credentials(username, password)
-                        console.print("[green]✓ Credentials stored securely[/green]\n")
-                else:
-                    console.print(f"[bold red]✗ Login failed: {error_msg}[/bold red]\n")
-                    sys.exit(1)
-            else:
-                console.print(f"[bold red]✗ Login failed: {error_msg}[/bold red]\n")
-                sys.exit(1)
-
+    except RobinhoodAuthError as e:
+        console.print(f"\n[bold red]✗ Login failed: {str(e)}[/bold red]\n")
+        sys.exit(1)
     except Exception as e:
         logger.error(f"Login command failed: {e}")
-        console.print(f"[bold red]✗ Login failed: {str(e)}[/bold red]\n")
+        console.print(f"\n[bold red]✗ Login failed: {str(e)}[/bold red]\n")
         sys.exit(1)
 
 

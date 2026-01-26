@@ -21,11 +21,56 @@ A Python-based stock and options trading analysis bot powered by Google Gemini L
 
 - **Language**: Python 3.9+
 - **LLM**: Google Gemini (google-generativeai SDK)
-- **Data Source**: Robinhood (robin_stocks library - unofficial API)
+- **Data Source**: Custom Robinhood API client (built from scratch)
 - **CLI**: Click + Rich
 - **Web**: Streamlit
 - **Scheduler**: APScheduler
 - **Security**: keyring + python-dotenv
+
+### Custom Robinhood Client
+
+We built a custom Robinhood API client from scratch to replace the unreliable `robin_stocks` library. Features include:
+
+- **Clean OAuth2 authentication** with device token support
+- **Session persistence** to avoid repeated logins
+- **Verification workflow handling** for SMS/email/app approval
+  - **SMS/Email preference**: Request SMS or email verification instead of app push
+  - Automatic verification code handling
+  - Fallback to app push if SMS/email not available
+- **Complete API coverage** for accounts, positions, quotes, and options
+- **Detailed logging** for debugging
+- **Production-ready error handling**
+
+See [src/robinhood/README.md](src/robinhood/README.md) for full documentation.
+
+#### SMS/Email Verification
+
+If you prefer SMS or email verification instead of app push notifications:
+
+```python
+from src.robinhood.client import RobinhoodClient
+
+client = RobinhoodClient()
+client.login(
+    username="your@email.com",
+    password="your_password",
+    prefer_sms=True  # Request SMS/email instead of app push
+)
+```
+
+Or test it:
+
+```bash
+python test_clean.py
+# Uses saved session or prompts for login with clean output
+```
+
+For integration testing:
+
+```bash
+python test_integration.py
+# Tests integration with StockBot auth module
+```
 
 ## Installation
 
@@ -229,23 +274,26 @@ Top Covered Call Opportunities:
 
 ## Development Status
 
-### Completed (Phase 1)
-- ✅ Project structure
-- ✅ Configuration management (pydantic + env)
-- ✅ Secure credentials storage (keyring)
-- ✅ Robinhood authentication with 2FA support
+### Completed
+- ✅ **Phase 1**: Project structure, configuration, credentials storage
+- ✅ **Phase 4**: Gemini LLM integration with mock data support
+- ✅ **Custom Robinhood Client**: Built from scratch to replace robin_stocks
+  - OAuth2 authentication with device tokens
+  - Session persistence and verification handling
+  - **SMS/email verification preference** (request SMS/email instead of app push)
+  - Account, positions, quotes, and options data fetching
+  - Comprehensive error handling and logging
 
 ### In Progress
-- 🔨 Data layer (rate limiter, API clients)
-- 🔨 Gemini LLM integration
-- 🔨 Covered call strategy implementation
+- 🔨 **Phase 5**: Covered call strategy implementation
+- 🔨 **Integration**: Connect custom Robinhood client with existing modules
 
 ### Planned
-- 📋 CLI interface
-- 📋 Web dashboard
-- 📋 Scheduler & automation
-- 📋 Email notifications
-- 📋 Comprehensive testing
+- 📋 **Phase 3**: Basic CLI interface
+- 📋 **Phase 6**: Enhanced CLI with full features
+- 📋 **Phase 7**: Web dashboard (Streamlit)
+- 📋 **Phase 7.5**: Scheduler & automation
+- 📋 **Phase 8**: Production readiness & testing
 
 ## Testing
 
@@ -304,9 +352,10 @@ For issues or questions:
 ## Roadmap
 
 - [x] Phase 1: Foundation & Authentication
+- [x] **Custom Robinhood Client**: Built from scratch (OAuth2, session management, complete API)
+- [x] Phase 4: Gemini Integration (with mock data support)
 - [ ] Phase 2: Data Layer with Rate Limiting
 - [ ] Phase 3: Basic CLI
-- [ ] Phase 4: Gemini Integration
 - [ ] Phase 5: Covered Call Strategy
 - [ ] Phase 6: Enhanced CLI
 - [ ] Phase 7: Web Dashboard

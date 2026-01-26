@@ -1,5 +1,7 @@
 # Core
-robin-stocks==3.0.5
+# Using latest from GitHub to fix Dec 2024 authentication issues
+# Install with: pip install git+https://github.com/jmfernandes/robin_stocks.git
+robin-stocks>=3.4.0
 google-generativeai==0.3.2
 streamlit==1.29.0
 click==8.1.7
@@ -12,7 +14,7 @@ APScheduler==3.10.4
 python-dotenv==1.0.0
 keyring==24.3.0
 pyotp==2.9.0
-pydantic==2.5.3
+pydantic>=2.7.0
 
 # Data Processing
 pandas==2.1.4
