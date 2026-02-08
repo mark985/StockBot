@@ -1,22 +1,33 @@
 """
 Stock data fetcher.
 Retrieves stock quotes, prices, and fundamentals from Robinhood.
+Uses the custom Robinhood client for reliable API access.
 """
 from typing import Optional, List
 from datetime import datetime
 from loguru import logger
 
-from src.data.robinhood_client import get_robinhood_client, RobinhoodAPIError
+from src.robinhood.client import RobinhoodClient
+from src.robinhood.exceptions import APIError
+from src.auth.robinhood_auth import ensure_authenticated
 from src.data.models import StockQuote
 
 
 class StockFetcher:
-    """Fetches stock market data."""
+    """Fetches stock market data using custom Robinhood client."""
 
     def __init__(self):
         """Initialize stock fetcher."""
-        self.client = get_robinhood_client()
+        self._client = None
         logger.debug("StockFetcher initialized")
+
+    @property
+    def client(self) -> RobinhoodClient:
+        """Get authenticated Robinhood client."""
+        if self._client is None:
+            auth = ensure_authenticated()
+            self._client = auth.get_client()
+        return self._client
 
     def get_quote(self, symbol: str) -> StockQuote:
         """
@@ -29,15 +40,15 @@ class StockFetcher:
             StockQuote: Quote object with current prices
 
         Raises:
-            RobinhoodAPIError: If fetching fails
+            APIError: If fetching fails
         """
         try:
             logger.debug(f"Fetching quote for {symbol}")
 
-            quote_data = self.client.get_stock_quote(symbol)
+            quote_data = self.client.get_quote(symbol.upper())
 
             if not quote_data:
-                raise RobinhoodAPIError(f"No quote data returned for {symbol}")
+                raise APIError(f"No quote data returned for {symbol}")
 
             # Parse quote data
             quote = StockQuote(
@@ -46,7 +57,7 @@ class StockFetcher:
                 bid_price=float(quote_data.get('bid_price')) if quote_data.get('bid_price') else None,
                 ask_price=float(quote_data.get('ask_price')) if quote_data.get('ask_price') else None,
                 previous_close=float(quote_data.get('previous_close')) if quote_data.get('previous_close') else None,
-                volume=int(float(quote_data.get('volume', 0))),
+                volume=int(float(quote_data.get('volume', 0))) if quote_data.get('volume') else 0,
                 updated_at=datetime.now()
             )
 
@@ -65,7 +76,7 @@ class StockFetcher:
 
     def get_multiple_quotes(self, symbols: List[str]) -> List[StockQuote]:
         """
-        Get quotes for multiple symbols.
+        Get quotes for multiple symbols efficiently.
 
         Args:
             symbols: List of stock ticker symbols
@@ -73,18 +84,44 @@ class StockFetcher:
         Returns:
             list: List of StockQuote objects
         """
-        quotes = []
+        try:
+            logger.debug(f"Fetching quotes for {len(symbols)} symbols")
 
-        for symbol in symbols:
-            try:
-                quote = self.get_quote(symbol)
-                quotes.append(quote)
-            except Exception as e:
-                logger.warning(f"Failed to fetch quote for {symbol}: {e}")
-                continue
+            # Use batch quotes endpoint
+            quotes_data = self.client.get_quotes([s.upper() for s in symbols])
 
-        logger.info(f"Fetched {len(quotes)}/{len(symbols)} quotes successfully")
-        return quotes
+            quotes = []
+            for quote_data in quotes_data:
+                if quote_data:
+                    try:
+                        quote = StockQuote(
+                            symbol=quote_data.get('symbol', '').upper(),
+                            last_trade_price=float(quote_data.get('last_trade_price', 0)),
+                            bid_price=float(quote_data.get('bid_price')) if quote_data.get('bid_price') else None,
+                            ask_price=float(quote_data.get('ask_price')) if quote_data.get('ask_price') else None,
+                            previous_close=float(quote_data.get('previous_close')) if quote_data.get('previous_close') else None,
+                            volume=int(float(quote_data.get('volume', 0))) if quote_data.get('volume') else 0,
+                            updated_at=datetime.now()
+                        )
+                        quotes.append(quote)
+                    except Exception as e:
+                        logger.warning(f"Failed to parse quote: {e}")
+                        continue
+
+            logger.info(f"Fetched {len(quotes)}/{len(symbols)} quotes successfully")
+            return quotes
+
+        except Exception as e:
+            logger.error(f"Failed to fetch multiple quotes: {e}")
+            # Fall back to individual fetching
+            quotes = []
+            for symbol in symbols:
+                try:
+                    quote = self.get_quote(symbol)
+                    quotes.append(quote)
+                except Exception:
+                    continue
+            return quotes
 
     def get_current_price(self, symbol: str) -> float:
         """
@@ -116,7 +153,9 @@ class StockFetcher:
         try:
             logger.debug(f"Fetching fundamentals for {symbol}")
 
-            fundamentals = self.client.get_stock_fundamentals(symbol)
+            # Fundamentals endpoint
+            url = f"https://api.robinhood.com/fundamentals/{symbol.upper()}/"
+            fundamentals = self.client.get(url)
 
             if fundamentals:
                 logger.info(f"Fetched fundamentals for {symbol}")

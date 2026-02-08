@@ -1,24 +1,77 @@
 """
 Options data fetcher.
 Retrieves options chains, contracts, and market data from Robinhood.
+Uses the custom Robinhood client for reliable API access.
 """
 from typing import List, Optional
-from datetime import datetime, date, timedelta
+from datetime import datetime, date
 from loguru import logger
 
-from src.data.robinhood_client import get_robinhood_client, RobinhoodAPIError
+from src.robinhood.client import RobinhoodClient
+from src.robinhood.endpoints import Endpoints
+from src.auth.robinhood_auth import ensure_authenticated
 from src.data.models import OptionContract
 from config.settings import get_settings
 
 
 class OptionsFetcher:
-    """Fetches options chain and contract data."""
+    """Fetches options chain and contract data using custom Robinhood client."""
 
     def __init__(self):
         """Initialize options fetcher."""
-        self.client = get_robinhood_client()
         self.settings = get_settings()
+        self._client = None
         logger.debug("OptionsFetcher initialized")
+
+    @property
+    def client(self) -> RobinhoodClient:
+        """Get authenticated Robinhood client."""
+        if self._client is None:
+            auth = ensure_authenticated()
+            self._client = auth.get_client()
+        return self._client
+
+    def get_options_chain(self, symbol: str) -> dict:
+        """
+        Get options chain metadata for a symbol.
+
+        Args:
+            symbol: Stock ticker symbol
+
+        Returns:
+            dict: Options chain with id, expiration_dates, etc.
+        """
+        try:
+            logger.debug(f"Fetching options chain for {symbol}")
+
+            # First, get the instrument to find the instrument ID
+            instrument = self.client.get_instrument_by_symbol(symbol.upper())
+            instrument_id = instrument.get("id")
+
+            if not instrument_id:
+                raise ValueError(f"Could not find instrument ID for {symbol}")
+
+            logger.debug(f"Found instrument ID for {symbol}: {instrument_id}")
+
+            # Query options chain by instrument ID
+            response = self.client.get(Endpoints.OPTIONS_CHAINS, params={"equity_instrument_ids": instrument_id})
+
+            results = response.get("results", [])
+            if not results:
+                raise ValueError(f"No options chain found for {symbol}")
+
+            chain = results[0]
+            expiration_count = len(chain.get("expiration_dates", []))
+            logger.info(f"Found options chain for {symbol}: {expiration_count} expirations")
+
+            if expiration_count == 0:
+                logger.warning(f"Options chain for {symbol} has no expiration dates")
+
+            return chain
+
+        except Exception as e:
+            logger.error(f"Failed to fetch options chain for {symbol}: {e}")
+            raise
 
     def get_available_expirations(self, symbol: str) -> List[str]:
         """
@@ -31,10 +84,8 @@ class OptionsFetcher:
             list: List of expiration dates (YYYY-MM-DD format)
         """
         try:
-            logger.debug(f"Fetching expiration dates for {symbol}")
-
-            dates = self.client.get_available_expiration_dates(symbol)
-
+            chain = self.get_options_chain(symbol)
+            dates = chain.get("expiration_dates", [])
             logger.info(f"Found {len(dates)} expiration dates for {symbol}")
             return dates
 
@@ -107,34 +158,59 @@ class OptionsFetcher:
             list: List of OptionContract objects
         """
         try:
-            logger.debug(
-                f"Fetching call options for {symbol} expiring {expiration_date}"
+            logger.debug(f"Fetching call options for {symbol} expiring {expiration_date}")
+
+            # Get options chain ID first
+            chain = self.get_options_chain(symbol)
+            chain_id = chain["id"]
+
+            # Fetch call options instruments
+            instruments = self.client.get_options_instruments(
+                chain_id=chain_id,
+                expiration_dates=[expiration_date],
+                option_type="call"
             )
 
-            options_data = self.client.find_options_for_stock(
-                symbol=symbol,
-                expiration_date=expiration_date,
-                option_type="call",
-                strike_price=strike_price
-            )
+            if not instruments:
+                logger.info(f"No call options found for {symbol} ({expiration_date})")
+                return []
 
-            options = []
-            for opt_data in options_data:
+            # Filter by strike price if specified
+            if strike_price is not None:
+                instruments = [i for i in instruments if abs(float(i.get("strike_price", 0)) - strike_price) < 0.01]
+
+            # Get market data for all options in batch
+            option_ids = [inst["id"] for inst in instruments if inst.get("id")]
+            market_data_map = {}
+
+            if option_ids:
                 try:
-                    option = self._parse_option_contract(symbol, opt_data, "call")
+                    market_data_list = self.client.get_options_market_data(option_ids)
+                    for md in market_data_list:
+                        if md and md.get("instrument"):
+                            inst_id = md["instrument"].split("/")[-2]
+                            market_data_map[inst_id] = md
+                except Exception as e:
+                    logger.warning(f"Could not fetch market data: {e}")
+
+            # Parse options
+            options = []
+            for inst in instruments:
+                try:
+                    inst_id = inst.get("id")
+                    market_data = market_data_map.get(inst_id, {})
+                    option = self._parse_option_contract(symbol, inst, market_data, "call")
                     if option:
                         options.append(option)
                 except Exception as e:
                     logger.warning(f"Failed to parse option contract: {e}")
                     continue
 
-            logger.info(f"Fetched {len(options)} call options for {symbol}")
+            logger.info(f"Fetched {len(options)} call options for {symbol} ({expiration_date})")
             return options
 
         except Exception as e:
-            logger.error(
-                f"Failed to fetch call options for {symbol} ({expiration_date}): {e}"
-            )
+            logger.error(f"Failed to fetch call options for {symbol} ({expiration_date}): {e}")
             raise
 
     def get_covered_call_options(
@@ -162,100 +238,158 @@ class OptionsFetcher:
             list: List of suitable OptionContract objects
         """
         try:
-            logger.info(
-                f"Finding covered call options for {symbol} @ ${current_price:.2f}"
-            )
+            logger.info(f"Finding covered call options for {symbol} @ ${current_price:.2f}")
+
+            # Get options chain and filtered expirations
+            chain = self.get_options_chain(symbol)
+            chain_id = chain["id"]
 
             # Get filtered expiration dates
-            expirations = self.get_filtered_expirations(symbol, min_days, max_days)
+            all_dates = chain.get("expiration_dates", [])
+            if min_days is None:
+                min_days = self.settings.strategy.min_days_to_expiration
+            if max_days is None:
+                max_days = self.settings.strategy.max_days_to_expiration
+
+            today = date.today()
+            expirations = []
+            for date_str in all_dates:
+                exp_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+                days_to_exp = (exp_date - today).days
+                if min_days <= days_to_exp <= max_days:
+                    expirations.append(date_str)
 
             if not expirations:
                 logger.warning(f"No suitable expiration dates found for {symbol}")
                 return []
+
+            logger.info(f"Filtered to {len(expirations)} expirations ({min_days}-{max_days} days)")
 
             # Calculate strike price range
             min_strike_multiplier, max_strike_multiplier = self.settings.strike_range
             min_strike = current_price * min_strike_multiplier
             max_strike = current_price * max_strike_multiplier
 
-            logger.debug(
-                f"Strike range: ${min_strike:.2f} - ${max_strike:.2f} "
-                f"({min_strike_multiplier:.1%} - {max_strike_multiplier:.1%} OTM)"
+            logger.debug(f"Strike range: ${min_strike:.2f} - ${max_strike:.2f}")
+
+            # Fetch all call options for these expirations in one request
+            instruments = self.client.get_options_instruments(
+                chain_id=chain_id,
+                expiration_dates=expirations,
+                option_type="call"
             )
 
-            all_options = []
+            if not instruments:
+                logger.warning(f"No call options found for {symbol}")
+                return []
 
-            # Fetch options for each expiration
-            for expiration in expirations:
+            # Filter by strike price range
+            filtered_instruments = [
+                inst for inst in instruments
+                if min_strike <= float(inst.get("strike_price", 0)) <= max_strike
+            ]
+
+            logger.info(f"Filtered to {len(filtered_instruments)} options in strike range")
+
+            # Get market data for filtered options
+            option_ids = [inst["id"] for inst in filtered_instruments if inst.get("id")]
+            market_data_map = {}
+
+            if option_ids:
                 try:
-                    options = self.get_call_options(symbol, expiration)
-
-                    # Filter by strike price
-                    filtered = [
-                        opt for opt in options
-                        if min_strike <= opt.strike_price <= max_strike
-                    ]
-
-                    all_options.extend(filtered)
-
+                    market_data_list = self.client.get_options_market_data(option_ids)
+                    for md in market_data_list:
+                        if md and md.get("instrument"):
+                            inst_id = md["instrument"].split("/")[-2]
+                            market_data_map[inst_id] = md
                 except Exception as e:
-                    logger.warning(
-                        f"Failed to fetch options for {symbol} ({expiration}): {e}"
-                    )
+                    logger.warning(f"Could not fetch market data: {e}")
+
+            # Parse options
+            options = []
+            for inst in filtered_instruments:
+                try:
+                    inst_id = inst.get("id")
+                    market_data = market_data_map.get(inst_id, {})
+                    option = self._parse_option_contract(symbol, inst, market_data, "call")
+                    if option:
+                        options.append(option)
+                except Exception as e:
+                    logger.warning(f"Failed to parse option contract: {e}")
                     continue
 
-            logger.info(
-                f"Found {len(all_options)} covered call candidates for {symbol}"
-            )
+            # Apply quality filters (volume, OI, bid/ask spread)
+            pre_filter_count = len(options)
+            min_volume = self.settings.strategy.min_option_volume
+            min_oi = self.settings.strategy.min_open_interest
+            max_spread_pct = self.settings.strategy.max_bid_ask_spread_percent
 
-            return all_options
+            quality_options = []
+            for opt in options:
+                # Skip if volume is below minimum
+                if not opt.volume or opt.volume < min_volume:
+                    continue
+                # Skip if open interest is below minimum
+                if not opt.open_interest or opt.open_interest < min_oi:
+                    continue
+                # Skip if bid/ask is missing
+                if not opt.bid_price or not opt.ask_price:
+                    continue
+                # Skip if bid/ask spread is too wide
+                midpoint = (opt.bid_price + opt.ask_price) / 2
+                if midpoint > 0:
+                    spread = (opt.ask_price - opt.bid_price) / midpoint
+                    if spread > max_spread_pct:
+                        continue
+                quality_options.append(opt)
+
+            filtered_out = pre_filter_count - len(quality_options)
+            if filtered_out > 0:
+                logger.info(
+                    f"Quality filter removed {filtered_out} options for {symbol} "
+                    f"(vol>={min_volume}, OI>={min_oi}, spread<{max_spread_pct:.0%})"
+                )
+
+            logger.info(f"Found {len(quality_options)} covered call candidates for {symbol}")
+            return quality_options
 
         except Exception as e:
-            logger.error(
-                f"Failed to fetch covered call options for {symbol}: {e}"
-            )
+            logger.error(f"Failed to fetch covered call options for {symbol}: {e}")
             raise
 
     def _parse_option_contract(
         self,
         symbol: str,
-        opt_data: dict,
+        instrument: dict,
+        market_data: dict,
         option_type: str
     ) -> Optional[OptionContract]:
         """
-        Parse option contract data from Robinhood API response.
+        Parse option contract from instrument and market data.
 
         Args:
             symbol: Stock ticker symbol
-            opt_data: Raw option data from API
+            instrument: Option instrument data
+            market_data: Market data (prices, Greeks)
             option_type: 'call' or 'put'
 
         Returns:
             OptionContract: Parsed option contract
         """
         try:
-            # Extract basic info
-            strike_price = float(opt_data.get('strike_price', 0))
-            expiration_str = opt_data.get('expiration_date')
-            contract_id = opt_data.get('id') or opt_data.get('url')
+            strike_price = float(instrument.get('strike_price', 0))
+            expiration_str = instrument.get('expiration_date')
+            contract_id = instrument.get('id')
 
             if not expiration_str or strike_price == 0:
                 return None
 
             expiration_date = datetime.strptime(expiration_str, "%Y-%m-%d").date()
 
-            # Get market data for pricing and Greeks
-            market_data = {}
-            if contract_id:
-                try:
-                    market_data = self.client.get_option_market_data(contract_id) or {}
-                except Exception as e:
-                    logger.debug(f"Could not fetch market data for option: {e}")
-
-            # Parse pricing
-            bid_price = self._safe_float(opt_data.get('bid_price') or market_data.get('bid_price'))
-            ask_price = self._safe_float(opt_data.get('ask_price') or market_data.get('ask_price'))
-            last_trade_price = self._safe_float(opt_data.get('last_trade_price') or market_data.get('last_trade_price'))
+            # Parse pricing from market data
+            bid_price = self._safe_float(market_data.get('bid_price'))
+            ask_price = self._safe_float(market_data.get('ask_price'))
+            last_trade_price = self._safe_float(market_data.get('last_trade_price'))
 
             # Calculate mark price (mid-point)
             mark_price = None
@@ -263,15 +397,15 @@ class OptionsFetcher:
                 mark_price = (bid_price + ask_price) / 2
 
             # Parse Greeks
-            delta = self._safe_float(opt_data.get('delta') or market_data.get('delta'))
-            gamma = self._safe_float(opt_data.get('gamma') or market_data.get('gamma'))
-            theta = self._safe_float(opt_data.get('theta') or market_data.get('theta'))
-            vega = self._safe_float(opt_data.get('vega') or market_data.get('vega'))
-            implied_volatility = self._safe_float(opt_data.get('implied_volatility') or market_data.get('implied_volatility'))
+            delta = self._safe_float(market_data.get('delta'))
+            gamma = self._safe_float(market_data.get('gamma'))
+            theta = self._safe_float(market_data.get('theta'))
+            vega = self._safe_float(market_data.get('vega'))
+            implied_volatility = self._safe_float(market_data.get('implied_volatility'))
 
             # Parse volume and open interest
-            volume = self._safe_int(opt_data.get('volume') or market_data.get('volume'))
-            open_interest = self._safe_int(opt_data.get('open_interest') or market_data.get('open_interest'))
+            volume = self._safe_int(market_data.get('volume'))
+            open_interest = self._safe_int(market_data.get('open_interest'))
 
             option = OptionContract(
                 symbol=symbol.upper(),

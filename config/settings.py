@@ -32,12 +32,15 @@ class StrategyConfig(BaseSettings):
     min_days_to_expiration: int = Field(default=7, description="Minimum days to expiration")
 
     # Strike price range as percentage above current price
-    min_strike_percent: float = Field(default=1.05, description="Minimum strike as % of current price")
-    max_strike_percent: float = Field(default=1.15, description="Maximum strike as % of current price")
+    min_strike_percent: float = Field(default=1.01, description="Minimum strike as % of current price")
+    max_strike_percent: float = Field(default=1.25, description="Maximum strike as % of current price")
 
     # Delta range for options screening
     min_delta: float = Field(default=0.15, description="Minimum delta value")
     max_delta: float = Field(default=0.35, description="Maximum delta value")
+
+    # Bid/Ask spread filter (max spread as fraction of midpoint)
+    max_bid_ask_spread_percent: float = Field(default=0.50, description="Max bid/ask spread as fraction of midpoint (0.50 = 50%)")
 
     class Config:
         env_prefix = ""

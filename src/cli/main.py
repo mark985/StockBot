@@ -47,7 +47,8 @@ def cli(ctx):
 @click.option('--password', '-p', help='Robinhood password')
 @click.option('--mfa-code', '-m', help='2FA/MFA code (optional - you will be prompted if needed)')
 @click.option('--store/--no-store', default=True, help='Store session for future use')
-def login(username, password, mfa_code, store):
+@click.option('--sms', is_flag=True, default=True, help='Prefer SMS/email verification instead of app push (default: True)')
+def login(username, password, mfa_code, store, sms):
     """
     Login to Robinhood and store session.
 
@@ -56,11 +57,11 @@ def login(username, password, mfa_code, store):
       - Then, if MFA is required, you'll see: "Please type in the MFA code: "
       - Enter your 6-digit code from your authenticator app
 
-    Alternatively, you can provide -m flag with the code upfront, but the
-    interactive prompt is usually more convenient.
+    By default, SMS verification is preferred over app push notification.
+    Use --no-sms to use app push notification instead.
     """
     from src.cli.commands import login_command
-    login_command(username, password, mfa_code, store)
+    login_command(username, password, mfa_code, store, sms)
 
 
 @cli.command()
@@ -79,18 +80,26 @@ def portfolio(show_eligible_only):
 
 
 @cli.command()
-@click.argument('symbol')
+@click.argument('symbols', nargs=-1, required=True)
 @click.option('--expiration', '-exp', help='Specific expiration date (YYYY-MM-DD)')
-@click.option('--min-days', type=int, help='Minimum days to expiration')
-@click.option('--max-days', type=int, help='Maximum days to expiration')
-def options(symbol, expiration, min_days, max_days):
+@click.option('--min-days', type=int, default=7, help='Minimum days to expiration (default: 7)')
+@click.option('--max-days', type=int, default=45, help='Maximum days to expiration (default: 45)')
+def options(symbols, expiration, min_days, max_days):
     """
-    View options chain for a symbol.
+    View options chain for one or more symbols.
 
-    SYMBOL: Stock ticker symbol (e.g., AAPL, MSFT)
+    SYMBOLS: Stock ticker symbols (e.g., AAPL MSFT TSLA NVDA)
+
+    Examples:
+
+        stockbot options AAPL
+
+        stockbot options AAPL TSLA NVDA MSFT GOOGL
+
+        stockbot options AAPL TSLA --min-days 14 --max-days 30
     """
     from src.cli.commands import options_command
-    options_command(symbol, expiration, min_days, max_days)
+    options_command(symbols, expiration, min_days, max_days)
 
 
 @cli.command()

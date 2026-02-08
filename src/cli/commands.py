@@ -21,14 +21,12 @@ from config.settings import get_settings
 console = Console()
 
 
-def login_command(username: Optional[str], password: Optional[str], mfa_code: Optional[str], store: bool):
+def login_command(username: Optional[str], password: Optional[str], mfa_code: Optional[str], store: bool, prefer_sms: bool = True):
     """
     Handle login command.
 
-    Note: If MFA/2FA is required, robin_stocks will prompt interactively.
-    You'll see prompts like:
-      - "Please type in the MFA code: "
-      - "Enter Robinhood code for validation: "
+    Note: If MFA/2FA is required, you'll be prompted interactively.
+    By default, SMS verification is preferred over app push.
     """
     try:
         console.print("\n[bold cyan]🔐 StockBot Login[/bold cyan]\n")
@@ -40,9 +38,13 @@ def login_command(username: Optional[str], password: Optional[str], mfa_code: Op
         if not username and not password:
             console.print("[yellow]Attempting to restore previous session...[/yellow]")
             if auth.login_with_stored_session():
-                console.print("[bold green]✓ Session restored successfully![/bold green]")
-                console.print(f"[green]Logged in as: {auth.username}[/green]\n")
-                return
+                # Verify the session is actually valid
+                if auth.verify_authentication():
+                    console.print("[bold green]✓ Session restored successfully![/bold green]")
+                    console.print(f"[green]Logged in as: {auth.username}[/green]\n")
+                    return
+                else:
+                    console.print("[yellow]Stored session expired, need fresh login...[/yellow]")
 
         # Get credentials if not provided
         if not username:
@@ -59,9 +61,12 @@ def login_command(username: Optional[str], password: Optional[str], mfa_code: Op
 
         # Attempt login
         console.print("[yellow]Logging in to Robinhood...[/yellow]")
-        console.print("[dim]If 2FA/MFA is required, you'll be prompted for the code...[/dim]\n")
+        if prefer_sms:
+            console.print("[dim]SMS/email verification will be requested if needed...[/dim]\n")
+        else:
+            console.print("[dim]App push notification will be used for verification...[/dim]\n")
 
-        success = auth.login(username, password, mfa_code, store)
+        success = auth.login(username, password, mfa_code, store, prefer_sms=prefer_sms)
 
         if success:
             console.print("\n[bold green]✓ Login successful![/bold green]")
@@ -195,69 +200,99 @@ def portfolio_command(show_eligible_only: bool):
         sys.exit(1)
 
 
-def options_command(symbol: str, expiration: Optional[str], min_days: Optional[int], max_days: Optional[int]):
-    """Handle options command."""
+def options_command(symbols: tuple, expiration: Optional[str], min_days: Optional[int], max_days: Optional[int]):
+    """Handle options command for one or more symbols."""
     try:
-        symbol = symbol.upper()
-        console.print(f"\n[bold cyan]📋 Options Chain for {symbol}[/bold cyan]\n")
-
         stock_fetcher = get_stock_fetcher()
         options_fetcher = get_options_fetcher()
 
-        # Get current stock price
-        with console.status(f"[yellow]Fetching {symbol} quote...[/yellow]"):
-            quote = stock_fetcher.get_quote(symbol)
+        symbols_list = [s.upper() for s in symbols]
+        console.print(f"\n[bold cyan]📋 Call Options for {', '.join(symbols_list)}[/bold cyan]\n")
 
-        console.print(f"[bold]Current Price:[/bold] [green]${quote.last_trade_price:.2f}[/green]\n")
+        for symbol in symbols_list:
+            try:
+                console.print(f"[bold cyan]{'='*60}[/bold cyan]")
+                console.print(f"[bold cyan]{symbol}[/bold cyan]")
+                console.print(f"[bold cyan]{'='*60}[/bold cyan]")
 
-        # Get options
-        with console.status(f"[yellow]Fetching options chain...[/yellow]"):
-            if expiration:
-                options = options_fetcher.get_call_options(symbol, expiration)
-            else:
-                options = options_fetcher.get_covered_call_options(
-                    symbol, quote.last_trade_price, min_days, max_days
-                )
+                # Get current stock price
+                with console.status(f"[yellow]Fetching {symbol} quote...[/yellow]"):
+                    quote = stock_fetcher.get_quote(symbol)
 
-        if not options:
-            console.print("[yellow]No options found with specified criteria[/yellow]\n")
-            return
+                console.print(f"[bold]Current Price:[/bold] [green]${quote.last_trade_price:.2f}[/green]\n")
 
-        # Create options table
-        table = Table(title=f"Call Options for {symbol}")
+                # Get options
+                with console.status(f"[yellow]Fetching {symbol} options chain...[/yellow]"):
+                    if expiration:
+                        options = options_fetcher.get_call_options(symbol, expiration)
+                    else:
+                        options = options_fetcher.get_covered_call_options(
+                            symbol, quote.last_trade_price, min_days, max_days
+                        )
 
-        table.add_column("Strike", justify="right", style="cyan")
-        table.add_column("Expiration", style="white")
-        table.add_column("DTE", justify="right", style="dim")
-        table.add_column("Premium", justify="right", style="green")
-        table.add_column("Delta", justify="right", style="white")
-        table.add_column("Volume", justify="right", style="white")
-        table.add_column("OI", justify="right", style="white")
-        table.add_column("Bid/Ask", justify="right", style="dim")
+                if not options:
+                    console.print("[yellow]No options found with specified criteria[/yellow]\n")
+                    continue
 
-        for opt in sorted(options, key=lambda x: (x.expiration_date, x.strike_price)):
-            premium = opt.premium or 0
-            delta = opt.delta or 0
-            volume = opt.volume or 0
-            oi = opt.open_interest or 0
+                # Create options table
+                table = Table(title=f"Call Options for {symbol}")
 
-            bid_ask = ""
-            if opt.bid_price and opt.ask_price:
-                bid_ask = f"${opt.bid_price:.2f}/${opt.ask_price:.2f}"
+                table.add_column("Strike", justify="right", style="cyan")
+                table.add_column("Exp", style="white")
+                table.add_column("DTE", justify="right", style="dim")
+                table.add_column("Bid/Ask", justify="right", style="green")
+                table.add_column("Last", justify="right", style="green")
+                table.add_column("Delta", justify="right", style="white")
+                table.add_column("Gamma", justify="right", style="white")
+                table.add_column("Theta", justify="right", style="red")
+                table.add_column("Vega", justify="right", style="white")
+                table.add_column("IV", justify="right", style="yellow")
+                table.add_column("Vol", justify="right", style="dim")
+                table.add_column("OI", justify="right", style="dim")
 
-            table.add_row(
-                f"${opt.strike_price:.2f}",
-                opt.expiration_date.strftime("%Y-%m-%d"),
-                str(opt.days_to_expiration),
-                f"${premium:.2f}",
-                f"{delta:.3f}" if delta else "",
-                str(volume),
-                str(oi),
-                bid_ask
-            )
+                for opt in sorted(options, key=lambda x: (x.expiration_date, x.strike_price)):
+                    volume = opt.volume or 0
+                    oi = opt.open_interest or 0
 
-        console.print(table)
-        console.print(f"\n[dim]Total options: {len(options)}[/dim]\n")
+                    # Format bid/ask
+                    bid_ask = ""
+                    if opt.bid_price and opt.ask_price:
+                        bid_ask = f"${opt.bid_price:.2f}/${opt.ask_price:.2f}"
+
+                    # Format last trade
+                    last_trade = f"${opt.last_trade_price:.2f}" if opt.last_trade_price else ""
+
+                    # Format Greeks
+                    delta_str = f"{opt.delta:.3f}" if opt.delta else ""
+                    gamma_str = f"{opt.gamma:.4f}" if opt.gamma else ""
+                    theta_str = f"{opt.theta:.3f}" if opt.theta else ""
+                    vega_str = f"{opt.vega:.3f}" if opt.vega else ""
+
+                    # Format IV as percentage
+                    iv_str = f"{opt.implied_volatility * 100:.1f}%" if opt.implied_volatility else ""
+
+                    table.add_row(
+                        f"${opt.strike_price:.2f}",
+                        opt.expiration_date.strftime("%m-%d"),
+                        str(opt.days_to_expiration),
+                        bid_ask,
+                        last_trade,
+                        delta_str,
+                        gamma_str,
+                        theta_str,
+                        vega_str,
+                        iv_str,
+                        str(volume),
+                        str(oi),
+                    )
+
+                console.print(table)
+                console.print(f"[dim]Total options for {symbol}: {len(options)}[/dim]\n")
+
+            except Exception as e:
+                logger.error(f"Failed to fetch options for {symbol}: {e}")
+                console.print(f"[bold red]✗ Failed to fetch options for {symbol}: {str(e)}[/bold red]\n")
+                continue
 
     except Exception as e:
         logger.error(f"Options command failed: {e}")

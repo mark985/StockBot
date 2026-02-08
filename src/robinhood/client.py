@@ -860,25 +860,56 @@ class RobinhoodClient:
         Get market data for options instruments.
 
         Args:
-            option_ids: List of options instrument IDs
+            option_ids: List of options instrument IDs (UUIDs)
 
         Returns:
             list: List of market data dictionaries with prices, Greeks, etc.
         """
+        if not option_ids:
+            return []
+
         logger.debug(f"Fetching market data for {len(option_ids)} options")
 
-        # API accepts comma-separated IDs
-        ids_str = ",".join(option_ids)
-        url = f"{Endpoints.OPTIONS_MARKET_DATA}?instruments={ids_str}"
-
         all_data = []
-        while url:
-            response = self.get(url)
-            data = response.get("results", [])
-            all_data.extend(data)
 
-            # Handle pagination
-            url = response.get("next")
+        # Try batch endpoint first with smaller batches
+        for i in range(0, len(option_ids), 5):
+            batch_ids = option_ids[i:i + 5]
+
+            # Build instrument URLs
+            instrument_urls = [
+                f"https://api.robinhood.com/options/instruments/{opt_id}/"
+                for opt_id in batch_ids
+            ]
+
+            try:
+                # Try the batch marketdata endpoint
+                url = "https://api.robinhood.com/marketdata/options/"
+                response = self.get(url, params={"instruments": ",".join(instrument_urls)})
+
+                if response and "results" in response:
+                    all_data.extend(response["results"])
+                    logger.debug(f"Batch fetch succeeded: {len(response['results'])} results")
+                    continue
+            except Exception as e:
+                logger.debug(f"Batch market data fetch failed: {e}")
+
+            # Fall back to individual fetches
+            for opt_id in batch_ids:
+                try:
+                    url = f"https://api.robinhood.com/marketdata/options/{opt_id}/"
+                    response = self.get(url)
+                    if response and not response.get("detail"):
+                        all_data.append(response)
+                except Exception:
+                    continue
+
+        if not all_data:
+            logger.warning(
+                "Could not fetch options market data. "
+                "This may require Robinhood Gold or options trading approval, "
+                "or market data may not be available outside trading hours."
+            )
 
         logger.debug(f"Retrieved market data for {len(all_data)} options")
         return all_data
