@@ -6,6 +6,7 @@ Uses the custom Robinhood client for reliable API access.
 from typing import Optional, List
 from datetime import datetime
 from loguru import logger
+import numpy as np
 
 from src.robinhood.client import RobinhoodClient
 from src.robinhood.exceptions import APIError
@@ -194,6 +195,78 @@ class StockFetcher:
         except Exception as e:
             logger.error(f"Failed to calculate spread for {symbol}: {e}")
             return None
+
+    def get_historical_volatility(self, symbol: str, days: int = 30) -> float:
+        """
+        Calculate historical volatility (HV) for a symbol.
+
+        Args:
+            symbol: Stock ticker symbol
+            days: Number of days for calculation (default 30 for HV30)
+
+        Returns:
+            float: Annualized historical volatility (e.g., 0.25 = 25%)
+
+        Raises:
+            APIError: If insufficient historical data
+
+        Formula:
+            HV = std(log_returns) * sqrt(252)
+            where log_returns = ln(price[i] / price[i-1])
+            and 252 = typical trading days per year
+        """
+        try:
+            logger.debug(f"Calculating {days}-day HV for {symbol}")
+
+            # Determine span based on days requested
+            if days <= 7:
+                span = "week"
+            elif days <= 30:
+                span = "month"
+            elif days <= 90:
+                span = "3month"
+            else:
+                span = "year"
+
+            # Get historical daily prices from Robinhood
+            historicals = self.client.get_historicals(
+                symbol.upper(),
+                interval="day",
+                span=span,
+                bounds="regular"
+            )
+
+            if not historicals or len(historicals) < 5:
+                raise APIError(f"Insufficient historical data for {symbol}: only {len(historicals)} data points")
+
+            # Extract closing prices (convert string to float)
+            closes = []
+            for h in historicals:
+                if h.get('close_price'):
+                    try:
+                        closes.append(float(h['close_price']))
+                    except (ValueError, TypeError):
+                        continue
+
+            # Take only the most recent 'days' data points
+            closes = closes[-days:] if len(closes) > days else closes
+
+            if len(closes) < 5:
+                raise APIError(f"Insufficient valid price data for {symbol}: only {len(closes)} data points")
+
+            # Calculate log returns: ln(price[i] / price[i-1])
+            log_returns = np.log(np.array(closes[1:]) / np.array(closes[:-1]))
+
+            # Calculate annualized volatility
+            daily_std = np.std(log_returns)
+            hv = daily_std * np.sqrt(252)  # Annualize: 252 trading days/year
+
+            logger.info(f"{symbol} HV{days}: {hv*100:.2f}%")
+            return hv
+
+        except Exception as e:
+            logger.error(f"Failed to calculate HV for {symbol}: {e}")
+            raise
 
 
 # Singleton instance

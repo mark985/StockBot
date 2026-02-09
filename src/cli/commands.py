@@ -209,6 +209,18 @@ def options_command(symbols: tuple, expiration: Optional[str], min_days: Optiona
         symbols_list = [s.upper() for s in symbols]
         console.print(f"\n[bold cyan]📋 Call Options for {', '.join(symbols_list)}[/bold cyan]\n")
 
+        # Calculate HV30 for each symbol upfront
+        console.print("[dim]Calculating historical volatility...[/dim]\n")
+        hv30_cache = {}
+        for symbol in symbols_list:
+            try:
+                hv30 = stock_fetcher.get_historical_volatility(symbol, days=30)
+                hv30_cache[symbol] = hv30
+                logger.info(f"{symbol} HV30: {hv30*100:.2f}%")
+            except Exception as e:
+                logger.warning(f"Could not calculate HV30 for {symbol}: {e}")
+                hv30_cache[symbol] = None
+
         for symbol in symbols_list:
             try:
                 console.print(f"[bold cyan]{'='*60}[/bold cyan]")
@@ -219,7 +231,12 @@ def options_command(symbols: tuple, expiration: Optional[str], min_days: Optiona
                 with console.status(f"[yellow]Fetching {symbol} quote...[/yellow]"):
                     quote = stock_fetcher.get_quote(symbol)
 
-                console.print(f"[bold]Current Price:[/bold] [green]${quote.last_trade_price:.2f}[/green]\n")
+                # Display current price and HV30
+                hv30 = hv30_cache.get(symbol)
+                if hv30:
+                    console.print(f"[bold]Current Price:[/bold] [green]${quote.last_trade_price:.2f}[/green]  |  [bold]HV30:[/bold] [yellow]{hv30*100:.1f}%[/yellow]\n")
+                else:
+                    console.print(f"[bold]Current Price:[/bold] [green]${quote.last_trade_price:.2f}[/green]\n")
 
                 # Get options
                 with console.status(f"[yellow]Fetching {symbol} options chain...[/yellow]"):
@@ -247,6 +264,9 @@ def options_command(symbols: tuple, expiration: Optional[str], min_days: Optiona
                 table.add_column("Theta", justify="right", style="red")
                 table.add_column("Vega", justify="right", style="white")
                 table.add_column("IV", justify="right", style="yellow")
+                table.add_column("HV30", justify="right", style="dim")
+                table.add_column("IV/HV30", justify="right", style="bold")
+                table.add_column("Assessment", style="green")
                 table.add_column("Vol", justify="right", style="dim")
                 table.add_column("OI", justify="right", style="dim")
 
@@ -271,6 +291,35 @@ def options_command(symbols: tuple, expiration: Optional[str], min_days: Optiona
                     # Format IV as percentage
                     iv_str = f"{opt.implied_volatility * 100:.1f}%" if opt.implied_volatility else ""
 
+                    # Calculate IV/HV30 ratio and assessment
+                    hv30 = hv30_cache.get(symbol)
+                    iv = opt.implied_volatility
+
+                    if iv and hv30:
+                        hv30_str = f"{hv30 * 100:.1f}%"
+                        iv_hv_ratio = iv / hv30
+
+                        # Determine assessment for covered call sellers
+                        # Higher IV = Better premium for sellers (selling overpriced options)
+                        if iv_hv_ratio > 1.15:
+                            assessment = "⭐⭐ Excellent"
+                            ratio_style = "bold green"
+                        elif iv_hv_ratio > 1.0:
+                            assessment = "⭐ Good Deal"
+                            ratio_style = "green"
+                        elif iv_hv_ratio >= 0.85:
+                            assessment = "Fair"
+                            ratio_style = "yellow"
+                        else:
+                            assessment = "Poor Deal"
+                            ratio_style = "red"
+
+                        ratio_str = f"[{ratio_style}]{iv_hv_ratio:.2f}[/{ratio_style}]"
+                    else:
+                        hv30_str = f"{hv30 * 100:.1f}%" if hv30 else "N/A"
+                        ratio_str = "N/A"
+                        assessment = "N/A"
+
                     table.add_row(
                         f"${opt.strike_price:.2f}",
                         opt.expiration_date.strftime("%m-%d"),
@@ -282,12 +331,22 @@ def options_command(symbols: tuple, expiration: Optional[str], min_days: Optiona
                         theta_str,
                         vega_str,
                         iv_str,
+                        hv30_str,
+                        ratio_str,
+                        assessment,
                         str(volume),
                         str(oi),
                     )
 
                 console.print(table)
-                console.print(f"[dim]Total options for {symbol}: {len(options)}[/dim]\n")
+                console.print(f"[dim]Total options for {symbol}: {len(options)}[/dim]")
+
+                # Add explanatory footer
+                console.print("\n[dim]💡 IV/HV30 Ratio Guide (Covered Call Sellers):[/dim]")
+                console.print("[dim]  • > 1.15: ⭐⭐ Excellent (Overpriced! Sell for high premium)[/dim]")
+                console.print("[dim]  • 1.0-1.15: ⭐ Good Deal (IV above HV → Good premium)[/dim]")
+                console.print("[dim]  • 0.85-1.0: Fair (IV near fair value)[/dim]")
+                console.print("[dim]  • < 0.85: Poor Deal (Underpriced! Low premium)[/dim]\n")
 
             except Exception as e:
                 logger.error(f"Failed to fetch options for {symbol}: {e}")

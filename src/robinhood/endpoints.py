@@ -34,6 +34,7 @@ class Endpoints:
 
     # Market Data
     QUOTES = f"{BASE_API}/quotes/"
+    HISTORICALS = f"{BASE_API}/quotes/historicals/{{symbol}}/"
     INSTRUMENTS = f"{BASE_API}/instruments/"
     FUNDAMENTALS = f"{BASE_API}/fundamentals/"
     MARKET_DATA_QUOTES = f"{BASE_API}/marketdata/quotes/{{instrument_id}}/"

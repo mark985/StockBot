@@ -789,6 +789,58 @@ class RobinhoodClient:
 
         return response.get("results", [])
 
+    def get_historicals(
+        self,
+        symbol: str,
+        interval: str = "day",
+        span: str = "month",
+        bounds: str = "regular"
+    ) -> list:
+        """
+        Get historical price data for a symbol.
+
+        Args:
+            symbol: Stock ticker (e.g., 'AAPL')
+            interval: 'day', '5minute', '10minute', 'hour', 'week'
+            span: 'day', 'week', 'month', '3month', 'year', '5year'
+            bounds: 'regular', 'trading', 'extended'
+
+        Returns:
+            list: Historical data points with close_price, open_price, volume, etc.
+
+        Example response format:
+            [
+                {
+                    'begins_at': '2026-01-10T00:00:00Z',
+                    'open_price': '182.50',
+                    'close_price': '183.25',
+                    'high_price': '184.00',
+                    'low_price': '181.75',
+                    'volume': 50234567,
+                    'session': 'reg',
+                    'interpolated': False
+                },
+                ...
+            ]
+        """
+        logger.debug(f"Fetching {interval} historicals for {symbol} (span={span})")
+
+        url = Endpoints.HISTORICALS.format(symbol=symbol.upper())
+        params = {
+            "interval": interval,
+            "span": span,
+            "bounds": bounds
+        }
+
+        response = self.get(url, params=params)
+        historicals = response.get("historicals", [])
+
+        if not historicals:
+            logger.warning(f"No historical data returned for {symbol}")
+
+        logger.info(f"Fetched {len(historicals)} historical data points for {symbol}")
+        return historicals
+
     # ===== Options Data Methods =====
 
     def get_options_chains(self, symbol: str) -> Dict[str, Any]:
