@@ -8,9 +8,13 @@ from loguru import logger
 from config.settings import get_settings
 
 
-def setup_logging():
+def setup_logging(log_level: str = None):
     """
     Configure loguru logging for the application.
+
+    Args:
+        log_level: Override console log level. If None, defaults to WARNING
+                   (quiet mode). Use "INFO" or "DEBUG" for verbose output.
 
     Sets up:
     - Console output with color
@@ -22,11 +26,12 @@ def setup_logging():
     # Remove default handler
     logger.remove()
 
-    # Console handler - INFO and above with color
+    # Console handler - WARNING by default (quiet), override with --verbose
+    console_level = log_level or "WARNING"
     logger.add(
         sys.stderr,
         format="<green>{time:HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan> - <level>{message}</level>",
-        level=settings.log_level,
+        level=console_level,
         colorize=True,
     )
 

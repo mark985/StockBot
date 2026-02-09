@@ -8,9 +8,6 @@ from rich.console import Console
 
 from src.utils.logging_config import setup_logging
 
-# Initialize logging
-setup_logging()
-
 # Initialize rich console for beautiful output
 console = Console()
 
@@ -30,8 +27,9 @@ Past performance does not guarantee future results.
 
 @click.group()
 @click.version_option(version="0.1.0", prog_name="StockBot")
+@click.option('--verbose', '-v', is_flag=True, default=False, help='Enable verbose logging (show INFO/DEBUG messages)')
 @click.pass_context
-def cli(ctx):
+def cli(ctx, verbose):
     """
     StockBot - AI-powered stock options analysis tool.
 
@@ -40,6 +38,8 @@ def cli(ctx):
     """
     # Ensure context object exists
     ctx.ensure_object(dict)
+    # Initialize logging - quiet by default, verbose with -v flag
+    setup_logging(log_level="DEBUG" if verbose else None)
 
 
 @cli.command()

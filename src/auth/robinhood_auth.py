@@ -184,7 +184,7 @@ class RobinhoodAuth:
                 return False
 
         except Exception as e:
-            logger.error(f"Authentication verification failed: {e}")
+            logger.debug(f"Authentication verification failed: {e}")
             self.is_authenticated = False
             return False
 

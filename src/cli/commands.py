@@ -293,38 +293,66 @@ def options_command(symbols: tuple, expiration: Optional[str], min_days: Optiona
                     continue
 
                 # Create options table
+                current_price = quote.last_trade_price
                 table = Table(title=f"Call Options for {symbol}")
 
-                table.add_column("Strike", justify="right", style="cyan")
-                table.add_column("Exp", style="white")
-                table.add_column("DTE", justify="right", style="dim")
-                table.add_column("Bid/Ask", justify="right", style="green")
+                table.add_column("Strike", justify="right")
+                table.add_column("Exp")
+                table.add_column("DTE", justify="right")
+                table.add_column("Bid/Ask", justify="right")
                 table.add_column("Last", justify="right", style="green")
-                table.add_column("Delta", justify="right", style="white")
-                table.add_column("Gamma", justify="right", style="white")
-                table.add_column("Theta", justify="right", style="red")
-                table.add_column("Vega", justify="right", style="white")
-                table.add_column("IV", justify="right", style="yellow")
-                table.add_column("HV30", justify="right", style="dim")
-                table.add_column("IV/HV30", justify="right", style="bold")
-                table.add_column("Assessment", style="green")
-                table.add_column("Vol", justify="right", style="dim")
-                table.add_column("OI", justify="right", style="dim")
+                table.add_column("Delta", justify="right")
+                table.add_column("Gamma", justify="right")
+                table.add_column("Theta", justify="right")
+                table.add_column("Vega", justify="right")
+                table.add_column("IV", justify="right")
+                table.add_column("IV/HV30", justify="right")
+                table.add_column("Assessment")
+                table.add_column("Vol", justify="right")
+                table.add_column("OI", justify="right")
 
-                for opt in sorted(options, key=lambda x: (x.expiration_date, x.strike_price)):
+                # Alternating colors per expiration group for readability
+                exp_colors = ["bright_white", "bright_cyan"]
+                sorted_options = sorted(options, key=lambda x: (x.expiration_date, x.strike_price))
+                prev_exp = None
+                exp_color_idx = 0
+
+                for opt in sorted_options:
+                    # Alternate color when expiration date changes
+                    if prev_exp is not None and opt.expiration_date != prev_exp:
+                        exp_color_idx = 1 - exp_color_idx
+                        table.add_section()
+                    prev_exp = opt.expiration_date
+                    row_color = exp_colors[exp_color_idx]
+
                     volume = opt.volume or 0
                     oi = opt.open_interest or 0
 
-                    # Format bid/ask
+                    # Format bid/ask with spread-based coloring
                     bid_ask = ""
                     if opt.bid_price and opt.ask_price:
-                        bid_ask = f"${opt.bid_price:.2f}/${opt.ask_price:.2f}"
+                        spread_pct = (opt.ask_price - opt.bid_price) / opt.ask_price * 100 if opt.ask_price > 0 else 0
+                        if spread_pct <= 5:
+                            ba_color = "green"
+                        elif spread_pct <= 15:
+                            ba_color = "yellow"
+                        else:
+                            ba_color = "red"
+                        bid_ask = f"[{ba_color}]${opt.bid_price:.2f}/${opt.ask_price:.2f}[/{ba_color}]"
 
                     # Format last trade
                     last_trade = f"${opt.last_trade_price:.2f}" if opt.last_trade_price else ""
 
-                    # Format Greeks
-                    delta_str = f"{opt.delta:.3f}" if opt.delta else ""
+                    # Format Greeks - color delta by threshold
+                    if opt.delta:
+                        if opt.delta < 0.20:
+                            delta_str = f"[bold green]{opt.delta:.3f}[/bold green]"
+                        elif opt.delta < 0.30:
+                            delta_str = f"[yellow]{opt.delta:.3f}[/yellow]"
+                        else:
+                            delta_str = f"[red]{opt.delta:.3f}[/red]"
+                    else:
+                        delta_str = ""
                     gamma_str = f"{opt.gamma:.4f}" if opt.gamma else ""
                     theta_str = f"{opt.theta:.3f}" if opt.theta else ""
                     vega_str = f"{opt.vega:.3f}" if opt.vega else ""
@@ -337,46 +365,56 @@ def options_command(symbols: tuple, expiration: Optional[str], min_days: Optiona
                     iv = opt.implied_volatility
 
                     if iv and hv30:
-                        hv30_str = f"{hv30 * 100:.1f}%"
                         iv_hv_ratio = iv / hv30
 
                         # Determine assessment for covered call sellers
                         # Higher IV = Better premium for sellers (selling overpriced options)
                         if iv_hv_ratio > 1.15:
-                            assessment = "⭐⭐ Excellent"
+                            assessment = "[bold green]⭐⭐ Excellent[/bold green]"
                             ratio_style = "bold green"
                         elif iv_hv_ratio > 1.0:
-                            assessment = "⭐ Good Deal"
+                            assessment = "[green]⭐ Good Deal[/green]"
                             ratio_style = "green"
                         elif iv_hv_ratio >= 0.85:
-                            assessment = "Fair"
+                            assessment = "[yellow]Fair[/yellow]"
                             ratio_style = "yellow"
                         else:
-                            assessment = "Poor Deal"
+                            assessment = "[red]Poor Deal[/red]"
                             ratio_style = "red"
 
                         ratio_str = f"[{ratio_style}]{iv_hv_ratio:.2f}[/{ratio_style}]"
                     else:
-                        hv30_str = f"{hv30 * 100:.1f}%" if hv30 else "N/A"
                         ratio_str = "N/A"
                         assessment = "N/A"
 
+                    # Color strike based on proximity to current price
+                    strike_pct = (opt.strike_price - current_price) / current_price
+                    if strike_pct <= 0.05:
+                        strike_str = f"[bold bright_yellow]${opt.strike_price:.2f}[/bold bright_yellow]"
+                    elif strike_pct <= 0.10:
+                        strike_str = f"[bright_white]${opt.strike_price:.2f}[/bright_white]"
+                    else:
+                        strike_str = f"[dim]${opt.strike_price:.2f}[/dim]"
+
+                    # Apply row color for expiration grouping
+                    def c(text):
+                        return f"[{row_color}]{text}[/{row_color}]"
+
                     table.add_row(
-                        f"${opt.strike_price:.2f}",
-                        opt.expiration_date.strftime("%m-%d"),
-                        str(opt.days_to_expiration),
+                        strike_str,
+                        c(opt.expiration_date.strftime("%m-%d")),
+                        c(str(opt.days_to_expiration)),
                         bid_ask,
                         last_trade,
                         delta_str,
-                        gamma_str,
-                        theta_str,
-                        vega_str,
-                        iv_str,
-                        hv30_str,
+                        c(gamma_str),
+                        f"[red]{theta_str}[/red]",
+                        c(vega_str),
+                        f"[yellow]{iv_str}[/yellow]",
                         ratio_str,
                         assessment,
-                        str(volume),
-                        str(oi),
+                        f"[dim]{volume}[/dim]",
+                        f"[dim]{oi}[/dim]",
                     )
 
                 console.print(table)
