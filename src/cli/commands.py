@@ -15,6 +15,7 @@ from src.auth.credentials_manager import get_credentials_manager
 from src.data.portfolio_fetcher import get_portfolio_fetcher
 from src.data.stock_fetcher import get_stock_fetcher
 from src.data.options_fetcher import get_options_fetcher
+from src.data.news_fetcher import get_news_fetcher
 from src.data.robinhood_client import get_robinhood_client
 from config.settings import get_settings
 
@@ -237,6 +238,46 @@ def options_command(symbols: tuple, expiration: Optional[str], min_days: Optiona
                     console.print(f"[bold]Current Price:[/bold] [green]${quote.last_trade_price:.2f}[/green]  |  [bold]HV30:[/bold] [yellow]{hv30*100:.1f}%[/yellow]\n")
                 else:
                     console.print(f"[bold]Current Price:[/bold] [green]${quote.last_trade_price:.2f}[/green]\n")
+
+                # Get latest news (last 24 hours)
+                try:
+                    news_fetcher = get_news_fetcher()
+                    with console.status(f"[yellow]Fetching {symbol} news...[/yellow]"):
+                        news_articles = news_fetcher.get_news(symbol)
+
+                    if news_articles:
+                        from datetime import datetime, timezone
+                        now = datetime.now(timezone.utc)
+                        news_lines = []
+                        for article in news_articles:
+                            # Format relative time
+                            time_str = ""
+                            if article.publish_time:
+                                pub_time = article.publish_time
+                                if pub_time.tzinfo is None:
+                                    pub_time = pub_time.replace(tzinfo=timezone.utc)
+                                delta = now - pub_time
+                                hours = int(delta.total_seconds() / 3600)
+                                if hours < 1:
+                                    minutes = int(delta.total_seconds() / 60)
+                                    time_str = f" [dim]({minutes}m ago)[/dim]"
+                                else:
+                                    time_str = f" [dim]({hours}h ago)[/dim]"
+
+                            news_lines.append(
+                                f"[cyan]•[/cyan] [dim][{article.publisher}][/dim] {article.title}{time_str}"
+                            )
+                            if article.summary:
+                                news_lines.append(f"  [dim]{article.summary}[/dim]")
+
+                        news_text = "\n".join(news_lines)
+                        console.print(Panel(news_text, title="📰 Latest News (24h)", border_style="blue"))
+                        console.print()
+                    else:
+                        console.print("[dim]No news in the last 24 hours[/dim]\n")
+                except Exception as e:
+                    logger.debug(f"Failed to fetch news for {symbol}: {e}")
+                    pass
 
                 # Get options
                 with console.status(f"[yellow]Fetching {symbol} options chain...[/yellow]"):

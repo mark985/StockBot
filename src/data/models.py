@@ -177,3 +177,14 @@ class MarketData(BaseModel):
     spy_price: Optional[float] = Field(None, description="SPY price")
     market_trend: Optional[str] = Field(None, description="Market trend (bullish/bearish/neutral)")
     updated_at: datetime = Field(default_factory=datetime.now, description="Last update time")
+
+
+class NewsArticle(BaseModel):
+    """News article for a stock symbol."""
+
+    title: str = Field(..., description="Article headline")
+    publisher: str = Field(..., description="News source/publisher")
+    link: str = Field(..., description="URL to full article")
+    publish_time: Optional[datetime] = Field(None, description="Publication timestamp")
+    thumbnail: Optional[str] = Field(None, description="Thumbnail image URL")
+    summary: Optional[str] = Field(None, description="Article summary/description")
