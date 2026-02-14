@@ -438,6 +438,244 @@ def options_command(symbols: tuple, expiration: Optional[str], min_days: Optiona
         sys.exit(1)
 
 
+def puts_command(symbols: tuple, expiration: Optional[str], min_days: Optional[int], max_days: Optional[int]):
+    """Handle puts command for one or more symbols (cash-secured put screening)."""
+    try:
+        stock_fetcher = get_stock_fetcher()
+        options_fetcher = get_options_fetcher()
+
+        symbols_list = [s.upper() for s in symbols]
+        console.print(f"\n[bold cyan]📋 Put Options for {', '.join(symbols_list)}[/bold cyan]\n")
+
+        # Calculate HV30 for each symbol upfront
+        console.print("[dim]Calculating historical volatility...[/dim]\n")
+        hv30_cache = {}
+        for symbol in symbols_list:
+            try:
+                hv30 = stock_fetcher.get_historical_volatility(symbol, days=30)
+                hv30_cache[symbol] = hv30
+                logger.info(f"{symbol} HV30: {hv30*100:.2f}%")
+            except Exception as e:
+                logger.warning(f"Could not calculate HV30 for {symbol}: {e}")
+                hv30_cache[symbol] = None
+
+        for symbol in symbols_list:
+            try:
+                console.print(f"[bold cyan]{'='*60}[/bold cyan]")
+                console.print(f"[bold cyan]{symbol}[/bold cyan]")
+                console.print(f"[bold cyan]{'='*60}[/bold cyan]")
+
+                # Get current stock price
+                with console.status(f"[yellow]Fetching {symbol} quote...[/yellow]"):
+                    quote = stock_fetcher.get_quote(symbol)
+
+                # Display current price and HV30
+                hv30 = hv30_cache.get(symbol)
+                if hv30:
+                    console.print(f"[bold]Current Price:[/bold] [green]${quote.last_trade_price:.2f}[/green]  |  [bold]HV30:[/bold] [yellow]{hv30*100:.1f}%[/yellow]\n")
+                else:
+                    console.print(f"[bold]Current Price:[/bold] [green]${quote.last_trade_price:.2f}[/green]\n")
+
+                # Get latest news (last 24 hours)
+                try:
+                    news_fetcher = get_news_fetcher()
+                    with console.status(f"[yellow]Fetching {symbol} news...[/yellow]"):
+                        news_articles = news_fetcher.get_news(symbol)
+
+                    if news_articles:
+                        from datetime import datetime, timezone
+                        now = datetime.now(timezone.utc)
+                        news_lines = []
+                        for article in news_articles:
+                            # Format relative time
+                            time_str = ""
+                            if article.publish_time:
+                                pub_time = article.publish_time
+                                if pub_time.tzinfo is None:
+                                    pub_time = pub_time.replace(tzinfo=timezone.utc)
+                                delta = now - pub_time
+                                hours = int(delta.total_seconds() / 3600)
+                                if hours < 1:
+                                    minutes = int(delta.total_seconds() / 60)
+                                    time_str = f" [dim]({minutes}m ago)[/dim]"
+                                else:
+                                    time_str = f" [dim]({hours}h ago)[/dim]"
+
+                            news_lines.append(
+                                f"[cyan]•[/cyan] [dim][{article.publisher}][/dim] {article.title}{time_str}"
+                            )
+                            if article.summary:
+                                news_lines.append(f"  [dim]{article.summary}[/dim]")
+
+                        news_text = "\n".join(news_lines)
+                        console.print(Panel(news_text, title="📰 Latest News (24h)", border_style="blue"))
+                        console.print()
+                    else:
+                        console.print("[dim]No news in the last 24 hours[/dim]\n")
+                except Exception as e:
+                    logger.debug(f"Failed to fetch news for {symbol}: {e}")
+                    pass
+
+                # Get put options
+                with console.status(f"[yellow]Fetching {symbol} put options chain...[/yellow]"):
+                    if expiration:
+                        options = options_fetcher.get_put_options(symbol, expiration)
+                    else:
+                        options = options_fetcher.get_cash_secured_put_options(
+                            symbol, quote.last_trade_price, min_days, max_days
+                        )
+
+                if not options:
+                    console.print("[yellow]No put options found with specified criteria[/yellow]\n")
+                    continue
+
+                # Create options table
+                current_price = quote.last_trade_price
+                table = Table(title=f"Put Options for {symbol}")
+
+                table.add_column("Strike", justify="right")
+                table.add_column("Exp")
+                table.add_column("DTE", justify="right")
+                table.add_column("Bid/Ask", justify="right")
+                table.add_column("Last", justify="right", style="green")
+                table.add_column("Delta", justify="right")
+                table.add_column("Gamma", justify="right")
+                table.add_column("Theta", justify="right")
+                table.add_column("Vega", justify="right")
+                table.add_column("IV", justify="right")
+                table.add_column("IV/HV30", justify="right")
+                table.add_column("Assessment")
+                table.add_column("Vol", justify="right")
+                table.add_column("OI", justify="right")
+
+                # Alternating colors per expiration group for readability
+                exp_colors = ["bright_white", "bright_cyan"]
+                sorted_options = sorted(options, key=lambda x: (x.expiration_date, -x.strike_price))
+                prev_exp = None
+                exp_color_idx = 0
+
+                for opt in sorted_options:
+                    # Alternate color when expiration date changes
+                    if prev_exp is not None and opt.expiration_date != prev_exp:
+                        exp_color_idx = 1 - exp_color_idx
+                        table.add_section()
+                    prev_exp = opt.expiration_date
+                    row_color = exp_colors[exp_color_idx]
+
+                    volume = opt.volume or 0
+                    oi = opt.open_interest or 0
+
+                    # Format bid/ask with spread-based coloring
+                    bid_ask = ""
+                    if opt.bid_price and opt.ask_price:
+                        spread_pct = (opt.ask_price - opt.bid_price) / opt.ask_price * 100 if opt.ask_price > 0 else 0
+                        if spread_pct <= 5:
+                            ba_color = "green"
+                        elif spread_pct <= 15:
+                            ba_color = "yellow"
+                        else:
+                            ba_color = "red"
+                        bid_ask = f"[{ba_color}]${opt.bid_price:.2f}/${opt.ask_price:.2f}[/{ba_color}]"
+
+                    # Format last trade
+                    last_trade = f"${opt.last_trade_price:.2f}" if opt.last_trade_price else ""
+
+                    # Format Greeks - color delta by threshold (puts have negative delta)
+                    if opt.delta is not None:
+                        abs_delta = abs(opt.delta)
+                        if abs_delta < 0.20:
+                            delta_str = f"[bold green]{opt.delta:.3f}[/bold green]"
+                        elif abs_delta < 0.30:
+                            delta_str = f"[yellow]{opt.delta:.3f}[/yellow]"
+                        else:
+                            delta_str = f"[red]{opt.delta:.3f}[/red]"
+                    else:
+                        delta_str = ""
+                    gamma_str = f"{opt.gamma:.4f}" if opt.gamma else ""
+                    theta_str = f"{opt.theta:.3f}" if opt.theta else ""
+                    vega_str = f"{opt.vega:.3f}" if opt.vega else ""
+
+                    # Format IV as percentage
+                    iv_str = f"{opt.implied_volatility * 100:.1f}%" if opt.implied_volatility else ""
+
+                    # Calculate IV/HV30 ratio and assessment
+                    hv30 = hv30_cache.get(symbol)
+                    iv = opt.implied_volatility
+
+                    if iv and hv30:
+                        iv_hv_ratio = iv / hv30
+
+                        # Determine assessment for put sellers
+                        # Higher IV = Better premium for sellers (selling overpriced options)
+                        if iv_hv_ratio > 1.15:
+                            assessment = "[bold green]⭐⭐ Excellent[/bold green]"
+                            ratio_style = "bold green"
+                        elif iv_hv_ratio > 1.0:
+                            assessment = "[green]⭐ Good Deal[/green]"
+                            ratio_style = "green"
+                        elif iv_hv_ratio >= 0.85:
+                            assessment = "[yellow]Fair[/yellow]"
+                            ratio_style = "yellow"
+                        else:
+                            assessment = "[red]Poor Deal[/red]"
+                            ratio_style = "red"
+
+                        ratio_str = f"[{ratio_style}]{iv_hv_ratio:.2f}[/{ratio_style}]"
+                    else:
+                        ratio_str = "N/A"
+                        assessment = "N/A"
+
+                    # Color strike based on proximity to current price (closer = higher assignment risk)
+                    strike_pct = (current_price - opt.strike_price) / current_price
+                    if strike_pct <= 0.05:
+                        strike_str = f"[bold bright_yellow]${opt.strike_price:.2f}[/bold bright_yellow]"
+                    elif strike_pct <= 0.10:
+                        strike_str = f"[bright_white]${opt.strike_price:.2f}[/bright_white]"
+                    else:
+                        strike_str = f"[dim]${opt.strike_price:.2f}[/dim]"
+
+                    # Apply row color for expiration grouping
+                    def c(text):
+                        return f"[{row_color}]{text}[/{row_color}]"
+
+                    table.add_row(
+                        strike_str,
+                        c(opt.expiration_date.strftime("%m-%d")),
+                        c(str(opt.days_to_expiration)),
+                        bid_ask,
+                        last_trade,
+                        delta_str,
+                        c(gamma_str),
+                        f"[red]{theta_str}[/red]",
+                        c(vega_str),
+                        f"[yellow]{iv_str}[/yellow]",
+                        ratio_str,
+                        assessment,
+                        f"[dim]{volume}[/dim]",
+                        f"[dim]{oi}[/dim]",
+                    )
+
+                console.print(table)
+                console.print(f"[dim]Total options for {symbol}: {len(options)}[/dim]")
+
+                # Add explanatory footer
+                console.print("\n[dim]💡 IV/HV30 Ratio Guide (Cash-Secured Put Sellers):[/dim]")
+                console.print("[dim]  • > 1.15: ⭐⭐ Excellent (Overpriced! Sell for high premium)[/dim]")
+                console.print("[dim]  • 1.0-1.15: ⭐ Good Deal (IV above HV → Good premium)[/dim]")
+                console.print("[dim]  • 0.85-1.0: Fair (IV near fair value)[/dim]")
+                console.print("[dim]  • < 0.85: Poor Deal (Underpriced! Low premium)[/dim]\n")
+
+            except Exception as e:
+                logger.error(f"Failed to fetch put options for {symbol}: {e}")
+                console.print(f"[bold red]✗ Failed to fetch put options for {symbol}: {str(e)}[/bold red]\n")
+                continue
+
+    except Exception as e:
+        logger.error(f"Puts command failed: {e}")
+        console.print(f"[bold red]✗ Failed to fetch put options: {str(e)}[/bold red]\n")
+        sys.exit(1)
+
+
 def quote_command(symbol: str):
     """Handle quote command."""
     try:

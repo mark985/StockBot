@@ -84,22 +84,52 @@ def portfolio(show_eligible_only):
 @click.option('--expiration', '-exp', help='Specific expiration date (YYYY-MM-DD)')
 @click.option('--min-days', type=int, default=7, help='Minimum days to expiration (default: 7)')
 @click.option('--max-days', type=int, default=45, help='Maximum days to expiration (default: 45)')
-def options(symbols, expiration, min_days, max_days):
+def cc(symbols, expiration, min_days, max_days):
     """
-    View options chain for one or more symbols.
+    Screen covered call options for one or more symbols.
+
+    Screens for OTM call options above the current stock price.
+    Useful for selling calls against shares you own to collect premium.
 
     SYMBOLS: Stock ticker symbols (e.g., AAPL MSFT TSLA NVDA)
 
     Examples:
 
-        stockbot options AAPL
+        stockbot cc AAPL
 
-        stockbot options AAPL TSLA NVDA MSFT GOOGL
+        stockbot cc AAPL TSLA NVDA MSFT GOOGL
 
-        stockbot options AAPL TSLA --min-days 14 --max-days 30
+        stockbot cc AAPL TSLA --min-days 14 --max-days 30
     """
     from src.cli.commands import options_command
     options_command(symbols, expiration, min_days, max_days)
+
+
+@cli.command()
+@click.argument('symbols', nargs=-1, required=True)
+@click.option('--expiration', '-exp', help='Specific expiration date (YYYY-MM-DD)')
+@click.option('--min-days', type=int, default=7, help='Minimum days to expiration (default: 7)')
+@click.option('--max-days', type=int, default=45, help='Maximum days to expiration (default: 45)')
+def csp(symbols, expiration, min_days, max_days):
+    """
+    Screen cash-secured put options for one or more symbols.
+
+    Screens for OTM put options below the current stock price.
+    Useful for selling puts to collect premium while being willing
+    to buy the stock at a lower price.
+
+    SYMBOLS: Stock ticker symbols (e.g., AAPL MSFT TSLA NVDA)
+
+    Examples:
+
+        stockbot csp AAPL
+
+        stockbot csp AAPL TSLA NVDA MSFT GOOGL
+
+        stockbot csp AAPL TSLA --min-days 14 --max-days 30
+    """
+    from src.cli.commands import puts_command
+    puts_command(symbols, expiration, min_days, max_days)
 
 
 @cli.command()

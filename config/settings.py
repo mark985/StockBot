@@ -31,9 +31,13 @@ class StrategyConfig(BaseSettings):
     max_days_to_expiration: int = Field(default=45, description="Maximum days to expiration")
     min_days_to_expiration: int = Field(default=7, description="Minimum days to expiration")
 
-    # Strike price range as percentage above current price
+    # Strike price range as percentage above current price (covered calls)
     min_strike_percent: float = Field(default=1.01, description="Minimum strike as % of current price")
     max_strike_percent: float = Field(default=1.25, description="Maximum strike as % of current price")
+
+    # Strike price range as percentage below current price (cash-secured puts)
+    min_put_strike_percent: float = Field(default=0.75, description="Minimum put strike as % of current price")
+    max_put_strike_percent: float = Field(default=0.99, description="Maximum put strike as % of current price")
 
     # Delta range for options screening
     min_delta: float = Field(default=0.15, description="Minimum delta value")
@@ -121,6 +125,11 @@ class Settings(BaseSettings):
     def strike_range(self) -> Tuple[float, float]:
         """Get strike price range as tuple."""
         return (self.strategy.min_strike_percent, self.strategy.max_strike_percent)
+
+    @property
+    def put_strike_range(self) -> Tuple[float, float]:
+        """Get put strike price range as tuple."""
+        return (self.strategy.min_put_strike_percent, self.strategy.max_put_strike_percent)
 
     @property
     def delta_range(self) -> Tuple[float, float]:

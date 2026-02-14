@@ -357,6 +357,208 @@ class OptionsFetcher:
             logger.error(f"Failed to fetch covered call options for {symbol}: {e}")
             raise
 
+    def get_put_options(
+        self,
+        symbol: str,
+        expiration_date: str,
+        strike_price: Optional[float] = None
+    ) -> List[OptionContract]:
+        """
+        Get put options for a specific expiration.
+
+        Args:
+            symbol: Stock ticker symbol
+            expiration_date: Expiration date (YYYY-MM-DD)
+            strike_price: Optional specific strike price
+
+        Returns:
+            list: List of OptionContract objects
+        """
+        try:
+            logger.debug(f"Fetching put options for {symbol} expiring {expiration_date}")
+
+            chain = self.get_options_chain(symbol)
+            chain_id = chain["id"]
+
+            instruments = self.client.get_options_instruments(
+                chain_id=chain_id,
+                expiration_dates=[expiration_date],
+                option_type="put"
+            )
+
+            if not instruments:
+                logger.info(f"No put options found for {symbol} ({expiration_date})")
+                return []
+
+            if strike_price is not None:
+                instruments = [i for i in instruments if abs(float(i.get("strike_price", 0)) - strike_price) < 0.01]
+
+            option_ids = [inst["id"] for inst in instruments if inst.get("id")]
+            market_data_map = {}
+
+            if option_ids:
+                try:
+                    market_data_list = self.client.get_options_market_data(option_ids)
+                    for md in market_data_list:
+                        if md and md.get("instrument"):
+                            inst_id = md["instrument"].split("/")[-2]
+                            market_data_map[inst_id] = md
+                except Exception as e:
+                    logger.warning(f"Could not fetch market data: {e}")
+
+            options = []
+            for inst in instruments:
+                try:
+                    inst_id = inst.get("id")
+                    market_data = market_data_map.get(inst_id, {})
+                    option = self._parse_option_contract(symbol, inst, market_data, "put")
+                    if option:
+                        options.append(option)
+                except Exception as e:
+                    logger.warning(f"Failed to parse option contract: {e}")
+                    continue
+
+            logger.info(f"Fetched {len(options)} put options for {symbol} ({expiration_date})")
+            return options
+
+        except Exception as e:
+            logger.error(f"Failed to fetch put options for {symbol} ({expiration_date}): {e}")
+            raise
+
+    def get_cash_secured_put_options(
+        self,
+        symbol: str,
+        current_price: float,
+        min_days: Optional[int] = None,
+        max_days: Optional[int] = None
+    ) -> List[OptionContract]:
+        """
+        Get suitable put options for cash-secured put strategy.
+
+        Filters options by:
+        - Expiration date range
+        - Out-of-the-money strikes (below current price)
+        - Strike price range from settings
+
+        Args:
+            symbol: Stock ticker symbol
+            current_price: Current stock price
+            min_days: Minimum days to expiration
+            max_days: Maximum days to expiration
+
+        Returns:
+            list: List of suitable OptionContract objects
+        """
+        try:
+            logger.info(f"Finding cash-secured put options for {symbol} @ ${current_price:.2f}")
+
+            chain = self.get_options_chain(symbol)
+            chain_id = chain["id"]
+
+            all_dates = chain.get("expiration_dates", [])
+            if min_days is None:
+                min_days = self.settings.strategy.min_days_to_expiration
+            if max_days is None:
+                max_days = self.settings.strategy.max_days_to_expiration
+
+            today = date.today()
+            expirations = []
+            for date_str in all_dates:
+                exp_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+                days_to_exp = (exp_date - today).days
+                if min_days <= days_to_exp <= max_days:
+                    expirations.append(date_str)
+
+            if not expirations:
+                logger.warning(f"No suitable expiration dates found for {symbol}")
+                return []
+
+            logger.info(f"Filtered to {len(expirations)} expirations ({min_days}-{max_days} days)")
+
+            # Calculate strike price range (below current price for OTM puts)
+            min_strike_multiplier, max_strike_multiplier = self.settings.put_strike_range
+            min_strike = current_price * min_strike_multiplier
+            max_strike = current_price * max_strike_multiplier
+
+            logger.debug(f"Put strike range: ${min_strike:.2f} - ${max_strike:.2f}")
+
+            instruments = self.client.get_options_instruments(
+                chain_id=chain_id,
+                expiration_dates=expirations,
+                option_type="put"
+            )
+
+            if not instruments:
+                logger.warning(f"No put options found for {symbol}")
+                return []
+
+            filtered_instruments = [
+                inst for inst in instruments
+                if min_strike <= float(inst.get("strike_price", 0)) <= max_strike
+            ]
+
+            logger.info(f"Filtered to {len(filtered_instruments)} options in strike range")
+
+            option_ids = [inst["id"] for inst in filtered_instruments if inst.get("id")]
+            market_data_map = {}
+
+            if option_ids:
+                try:
+                    market_data_list = self.client.get_options_market_data(option_ids)
+                    for md in market_data_list:
+                        if md and md.get("instrument"):
+                            inst_id = md["instrument"].split("/")[-2]
+                            market_data_map[inst_id] = md
+                except Exception as e:
+                    logger.warning(f"Could not fetch market data: {e}")
+
+            options = []
+            for inst in filtered_instruments:
+                try:
+                    inst_id = inst.get("id")
+                    market_data = market_data_map.get(inst_id, {})
+                    option = self._parse_option_contract(symbol, inst, market_data, "put")
+                    if option:
+                        options.append(option)
+                except Exception as e:
+                    logger.warning(f"Failed to parse option contract: {e}")
+                    continue
+
+            # Apply quality filters (volume, OI, bid/ask spread)
+            pre_filter_count = len(options)
+            min_volume = self.settings.strategy.min_option_volume
+            min_oi = self.settings.strategy.min_open_interest
+            max_spread_pct = self.settings.strategy.max_bid_ask_spread_percent
+
+            quality_options = []
+            for opt in options:
+                if not opt.volume or opt.volume < min_volume:
+                    continue
+                if not opt.open_interest or opt.open_interest < min_oi:
+                    continue
+                if not opt.bid_price or not opt.ask_price:
+                    continue
+                midpoint = (opt.bid_price + opt.ask_price) / 2
+                if midpoint > 0:
+                    spread = (opt.ask_price - opt.bid_price) / midpoint
+                    if spread > max_spread_pct:
+                        continue
+                quality_options.append(opt)
+
+            filtered_out = pre_filter_count - len(quality_options)
+            if filtered_out > 0:
+                logger.info(
+                    f"Quality filter removed {filtered_out} options for {symbol} "
+                    f"(vol>={min_volume}, OI>={min_oi}, spread<{max_spread_pct:.0%})"
+                )
+
+            logger.info(f"Found {len(quality_options)} cash-secured put candidates for {symbol}")
+            return quality_options
+
+        except Exception as e:
+            logger.error(f"Failed to fetch cash-secured put options for {symbol}: {e}")
+            raise
+
     def _parse_option_contract(
         self,
         symbol: str,
