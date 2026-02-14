@@ -113,7 +113,8 @@ def cc(symbols, expiration, min_days, max_days, simple):
 @click.option('--expiration', '-exp', help='Specific expiration date (YYYY-MM-DD)')
 @click.option('--min-days', type=int, default=7, help='Minimum days to expiration (default: 7)')
 @click.option('--max-days', type=int, default=45, help='Maximum days to expiration (default: 45)')
-def csp(symbols, expiration, min_days, max_days):
+@click.option('--simple', '-s', is_flag=True, default=False, help='Simplified output with fewer columns')
+def csp(symbols, expiration, min_days, max_days, simple):
     """
     Screen cash-secured put options for one or more symbols.
 
@@ -127,12 +128,14 @@ def csp(symbols, expiration, min_days, max_days):
 
         stockbot csp AAPL
 
+        stockbot csp AAPL --simple
+
         stockbot csp AAPL TSLA NVDA MSFT GOOGL
 
         stockbot csp AAPL TSLA --min-days 14 --max-days 30
     """
     from src.cli.commands import puts_command
-    puts_command(symbols, expiration, min_days, max_days)
+    puts_command(symbols, expiration, min_days, max_days, simple)
 
 
 @cli.command()
