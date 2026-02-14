@@ -84,7 +84,8 @@ def portfolio(show_eligible_only):
 @click.option('--expiration', '-exp', help='Specific expiration date (YYYY-MM-DD)')
 @click.option('--min-days', type=int, default=7, help='Minimum days to expiration (default: 7)')
 @click.option('--max-days', type=int, default=45, help='Maximum days to expiration (default: 45)')
-def cc(symbols, expiration, min_days, max_days):
+@click.option('--simple', '-s', is_flag=True, default=False, help='Simplified output with fewer columns')
+def cc(symbols, expiration, min_days, max_days, simple):
     """
     Screen covered call options for one or more symbols.
 
@@ -97,12 +98,14 @@ def cc(symbols, expiration, min_days, max_days):
 
         stockbot cc AAPL
 
+        stockbot cc AAPL --simple
+
         stockbot cc AAPL TSLA NVDA MSFT GOOGL
 
         stockbot cc AAPL TSLA --min-days 14 --max-days 30
     """
     from src.cli.commands import options_command
-    options_command(symbols, expiration, min_days, max_days)
+    options_command(symbols, expiration, min_days, max_days, simple)
 
 
 @cli.command()

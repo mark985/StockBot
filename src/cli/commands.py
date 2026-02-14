@@ -201,7 +201,7 @@ def portfolio_command(show_eligible_only: bool):
         sys.exit(1)
 
 
-def options_command(symbols: tuple, expiration: Optional[str], min_days: Optional[int], max_days: Optional[int]):
+def options_command(symbols: tuple, expiration: Optional[str], min_days: Optional[int], max_days: Optional[int], simple: bool = False):
     """Handle options command for one or more symbols."""
     try:
         stock_fetcher = get_stock_fetcher()
@@ -301,15 +301,19 @@ def options_command(symbols: tuple, expiration: Optional[str], min_days: Optiona
                 table.add_column("DTE", justify="right")
                 table.add_column("Bid/Ask", justify="right")
                 table.add_column("Last", justify="right", style="green")
-                table.add_column("Delta", justify="right")
-                table.add_column("Gamma", justify="right")
-                table.add_column("Theta", justify="right")
-                table.add_column("Vega", justify="right")
-                table.add_column("IV", justify="right")
+                if simple:
+                    table.add_column("Delta, IV", justify="right")
+                else:
+                    table.add_column("Delta", justify="right")
+                    table.add_column("Gamma", justify="right")
+                    table.add_column("Theta", justify="right")
+                    table.add_column("Vega", justify="right")
+                    table.add_column("IV", justify="right")
                 table.add_column("IV/HV30", justify="right")
                 table.add_column("Assessment")
-                table.add_column("Vol", justify="right")
-                table.add_column("OI", justify="right")
+                if not simple:
+                    table.add_column("Vol", justify="right")
+                    table.add_column("OI", justify="right")
 
                 # Alternating colors per expiration group for readability
                 exp_colors = ["bright_white", "bright_cyan"]
@@ -360,6 +364,10 @@ def options_command(symbols: tuple, expiration: Optional[str], min_days: Optiona
                     # Format IV as percentage
                     iv_str = f"{opt.implied_volatility * 100:.1f}%" if opt.implied_volatility else ""
 
+                    # Format combined Delta, IV for simple mode
+                    if simple:
+                        delta_iv_str = f"{delta_str}, [yellow]{iv_str}[/yellow]" if delta_str and iv_str else delta_str or f"[yellow]{iv_str}[/yellow]"
+
                     # Calculate IV/HV30 ratio and assessment
                     hv30 = hv30_cache.get(symbol)
                     iv = opt.implied_volatility
@@ -400,22 +408,34 @@ def options_command(symbols: tuple, expiration: Optional[str], min_days: Optiona
                     def c(text):
                         return f"[{row_color}]{text}[/{row_color}]"
 
-                    table.add_row(
-                        strike_str,
-                        c(opt.expiration_date.strftime("%m-%d")),
-                        c(str(opt.days_to_expiration)),
-                        bid_ask,
-                        last_trade,
-                        delta_str,
-                        c(gamma_str),
-                        f"[red]{theta_str}[/red]",
-                        c(vega_str),
-                        f"[yellow]{iv_str}[/yellow]",
-                        ratio_str,
-                        assessment,
-                        f"[dim]{volume}[/dim]",
-                        f"[dim]{oi}[/dim]",
-                    )
+                    if simple:
+                        table.add_row(
+                            strike_str,
+                            c(opt.expiration_date.strftime("%m-%d")),
+                            c(str(opt.days_to_expiration)),
+                            bid_ask,
+                            last_trade,
+                            delta_iv_str,
+                            ratio_str,
+                            assessment,
+                        )
+                    else:
+                        table.add_row(
+                            strike_str,
+                            c(opt.expiration_date.strftime("%m-%d")),
+                            c(str(opt.days_to_expiration)),
+                            bid_ask,
+                            last_trade,
+                            delta_str,
+                            c(gamma_str),
+                            f"[red]{theta_str}[/red]",
+                            c(vega_str),
+                            f"[yellow]{iv_str}[/yellow]",
+                            ratio_str,
+                            assessment,
+                            f"[dim]{volume}[/dim]",
+                            f"[dim]{oi}[/dim]",
+                        )
 
                 console.print(table)
                 console.print(f"[dim]Total options for {symbol}: {len(options)}[/dim]")
